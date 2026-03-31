@@ -1,0 +1,113 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  @apply transition-colors duration-200;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f5f5f5;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e3a5f;
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #152d4a;
+}
+
+body {
+  @apply bg-white;
+}
+
+.btn-primary {
+  @apply bg-[#1e3a5f] text-white hover:bg-[#152d4a] px-6 py-2 rounded-lg font-medium transition-colors;
+}
+
+.btn-cta {
+  @apply bg-orange-500 text-white hover:bg-orange-600 px-6 py-3 rounded-lg font-bold transition-colors;
+}
+
+.btn-secondary {
+  @apply bg-gray-800 text-white hover:bg-gray-900 px-6 py-2 rounded-lg font-medium transition-colors;
+}
+
+.btn-danger {
+  @apply bg-red-600 text-white hover:bg-red-700 px-6 py-2 rounded-lg font-medium transition-colors;
+}
+
+.card {
+  @apply bg-white rounded-xl shadow-lg p-6;
+}
+
+.status-badge {
+  @apply inline-block px-3 py-1 rounded-full text-sm font-medium;
+}
+
+.status-pending {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+.status-processing {
+  @apply bg-blue-100 text-blue-800;
+}
+
+.status-in-transit {
+  @apply bg-blue-100 text-blue-800;
+}
+
+.status-delivered {
+  @apply bg-green-100 text-green-800;
+}
+
+.status-failed {
+  @apply bg-red-100 text-red-800;
+}
+
+.status-cancelled {
+  @apply bg-gray-100 text-gray-800;
+}
+
+.input-field {
+  @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent;
+}
+
+.fade-in {
+  @apply animate-fade-in;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.slide-in {
+  animation: slide-in 0.3s ease-out;
+}
