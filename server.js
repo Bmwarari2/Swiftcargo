@@ -77,6 +77,9 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 // Static files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Serve React frontend static assets
+app.use(express.static(path.join(__dirname, 'client', 'dist')));
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -133,7 +136,15 @@ app.use('/api/consolidation', consolidationRoutes);
 app.use('/api/prohibited', prohibitedRoutes);
 
 /**
- * 404 handler
+ * SPA fallback — serve index.html for all non-API routes so that
+ * React Router can handle client-side navigation.
+ */
+app.get(/^(?!\/api).*/, (req, res) => {
+  res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
+});
+
+/**
+ * 404 handler (API routes only)
  */
 app.use((req, res) => {
   res.status(404).json({
