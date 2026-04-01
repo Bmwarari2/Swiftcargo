@@ -3,26 +3,51 @@ import express from 'express';
 const router = express.Router();
 
 /**
- * Simulated exchange rates (in production, these would come from an API)
- * Rates are slightly randomized to simulate live data
+ * Default base rates — used as fallback if admin hasn't set rates yet
  */
-function getExchangeRates() {
-  // Base rates with slight randomization (±2%)
-  const variation = 0.98 + Math.random() * 0.04;
+const DEFAULT_RATES = {
+  USD_KES: 130.5,
+  GBP_KES: 164.2,
+  EUR_KES: 142.8,
+  CNY_KES: 18.2,
+};
 
-  return {
-    rates: {
-      'USD_KES': 130.5 * variation,
-      'GBP_KES': 164.2 * variation,
-      'EUR_KES': 142.8 * variation,
-      'KES_USD': (1 / (130.5 * variation)).toFixed(6),
-      'KES_GBP': (1 / (164.2 * variation)).toFixed(6),
-      'KES_EUR': (1 / (142.8 * variation)).toFixed(6),
-      'CNY_KES': 18.2 * variation
-    },
-    timestamp: new Date().toISOString(),
-    source: 'SwiftCargo Exchange Service'
+/**
+ * Read rates from the database if available, otherwise fall back to defaults.
+ */
+function getExchangeRates(db) {
+  let baseRates = { ...DEFAULT_RATES };
+  let source = 'SwiftCargo Default Rates';
+  let lastUpdated = null;
+
+  try {
+    const rows = db.prepare('SELECT currency_pair, rate, updated_at FROM exchange_rates').all();
+    if (rows.length > 0) {
+      rows.forEach((r) => {
+        baseRates[r.currency_pair] = r.rate;
+        if (!lastUpdated || r.updated_at > lastUpdated) {
+          lastUpdated = r.updated_at;
+        }
+      });
+      source = 'SwiftCargo Admin Rates';
+    }
+  } catch {
+    // Table might not exist yet — stick with defaults
+  }
+
+  // Build the full rate set including inverses
+  const rates = {
+    USD_KES: baseRates.USD_KES,
+    GBP_KES: baseRates.GBP_KES,
+    EUR_KES: baseRates.EUR_KES,
+    CNY_KES: baseRates.CNY_KES,
+    KES_USD: 1 / baseRates.USD_KES,
+    KES_GBP: 1 / baseRates.GBP_KES,
+    KES_EUR: 1 / baseRates.EUR_KES,
+    KES_CNY: 1 / baseRates.CNY_KES,
   };
+
+  return { rates, source, lastUpdated };
 }
 
 /**
@@ -31,18 +56,19 @@ function getExchangeRates() {
  */
 router.get('/rates', (req, res) => {
   try {
-    const ratesData = getExchangeRates();
+    const { rates, source, lastUpdated } = getExchangeRates(req.db);
 
     res.json({
       success: true,
       message: 'Exchange rates retrieved',
       data: {
-        USD_KES: parseFloat(ratesData.rates.USD_KES.toFixed(2)),
-        GBP_KES: parseFloat(ratesData.rates.GBP_KES.toFixed(2)),
-        EUR_KES: parseFloat(ratesData.rates.EUR_KES.toFixed(2)),
-        CNY_KES: parseFloat(ratesData.rates.CNY_KES.toFixed(2)),
-        timestamp: ratesData.timestamp,
-        last_updated: new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })
+        USD_KES: parseFloat(rates.USD_KES.toFixed(2)),
+        GBP_KES: parseFloat(rates.GBP_KES.toFixed(2)),
+        EUR_KES: parseFloat(rates.EUR_KES.toFixed(2)),
+        CNY_KES: parseFloat(rates.CNY_KES.toFixed(2)),
+        source,
+        timestamp: new Date().toISOString(),
+        last_updated: lastUpdated || new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })
       }
     });
   } catch (error) {
@@ -85,40 +111,21 @@ router.post('/convert', (req, res) => {
       });
     }
 
-    const ratesData = getExchangeRates();
+    const { rates } = getExchangeRates(req.db);
     let rate = 1;
 
-    // Get the appropriate exchange rate
-    if (from_currency === 'USD' && to_currency === 'KES') {
-      rate = ratesData.rates.USD_KES;
-    } else if (from_currency === 'GBP' && to_currency === 'KES') {
-      rate = ratesData.rates.GBP_KES;
-    } else if (from_currency === 'EUR' && to_currency === 'KES') {
-      rate = ratesData.rates.EUR_KES;
-    } else if (from_currency === 'CNY' && to_currency === 'KES') {
-      rate = ratesData.rates.CNY_KES;
-    } else if (from_currency === 'KES' && to_currency === 'USD') {
-      rate = parseFloat(ratesData.rates.KES_USD);
-    } else if (from_currency === 'KES' && to_currency === 'GBP') {
-      rate = parseFloat(ratesData.rates.KES_GBP);
-    } else if (from_currency === 'KES' && to_currency === 'EUR') {
-      rate = parseFloat(ratesData.rates.KES_EUR);
-    } else if (from_currency === to_currency) {
+    const pairKey = `${from_currency}_${to_currency}`;
+    if (from_currency === to_currency) {
       rate = 1;
+    } else if (rates[pairKey] !== undefined) {
+      rate = rates[pairKey];
     } else {
-      // Handle indirect conversions
-      if (from_currency === 'USD' && to_currency === 'GBP') {
-        rate = ratesData.rates.USD_KES * parseFloat(ratesData.rates.KES_GBP);
-      } else if (from_currency === 'GBP' && to_currency === 'USD') {
-        rate = ratesData.rates.GBP_KES * parseFloat(ratesData.rates.KES_USD);
-      } else if (from_currency === 'USD' && to_currency === 'EUR') {
-        rate = ratesData.rates.USD_KES * parseFloat(ratesData.rates.KES_EUR);
-      } else if (from_currency === 'EUR' && to_currency === 'USD') {
-        rate = ratesData.rates.EUR_KES * parseFloat(ratesData.rates.KES_USD);
-      } else if (from_currency === 'GBP' && to_currency === 'EUR') {
-        rate = ratesData.rates.GBP_KES * parseFloat(ratesData.rates.KES_EUR);
-      } else if (from_currency === 'EUR' && to_currency === 'GBP') {
-        rate = ratesData.rates.EUR_KES * parseFloat(ratesData.rates.KES_GBP);
+      // Indirect conversion via KES
+      const fromToKES = rates[`${from_currency}_KES`];
+      const kesToTarget = rates[`KES_${to_currency}`];
+
+      if (fromToKES !== undefined && kesToTarget !== undefined) {
+        rate = fromToKES * kesToTarget;
       } else {
         return res.status(400).json({
           success: false,
