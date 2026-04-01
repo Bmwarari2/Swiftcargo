@@ -13,8 +13,8 @@ export const TrackPackage = () => {
 
   const statusTimeline = [
     { status: 'pending', label: 'Order Placed', icon: Package },
-    { status: 'processing', label: 'Being Processed', icon: Clock },
-    { status: 'in-transit', label: 'In Transit', icon: Package },
+    { status: 'received_at_warehouse', label: 'Received at Warehouse', icon: Clock },
+    { status: 'in_transit', label: 'In Transit', icon: Package },
     { status: 'delivered', label: 'Delivered', icon: Check },
   ]
 
@@ -29,7 +29,7 @@ export const TrackPackage = () => {
       setLoading(true)
       setError(null)
       const response = await ordersApi.track(trackingNumber)
-      setPackage(response.data)
+      setPackage(response.data.tracking)
     } catch (err) {
       setError(t('track.notFound'))
       toast.error(t('track.notFound'))
@@ -111,7 +111,7 @@ export const TrackPackage = () => {
                 <div>
                   <p className="text-gray-600 text-sm mb-1">{t('track.estimatedDelivery')}</p>
                   <p className="text-2xl font-bold text-gray-900">
-                    {new Date(package_.estimatedDelivery || Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString()}
+                    {new Date(package_.estimated_delivery || new Date(package_.created_at).getTime() + 14 * 24 * 60 * 60 * 1000).toLocaleDateString()}
                   </p>
                 </div>
               </div>
@@ -119,7 +119,7 @@ export const TrackPackage = () => {
               <div>
                 <p className="text-gray-600 text-sm mb-2">{t('track.lastUpdate')}</p>
                 <p className="text-gray-900">
-                  {new Date(package_.updatedAt).toLocaleString()}
+                  {new Date(package_.updated_at || package_.created_at).toLocaleString()}
                 </p>
               </div>
             </div>
@@ -190,12 +190,12 @@ export const TrackPackage = () => {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Weight:</span>
-                  <span className="font-semibold text-gray-900">{package_.weight} kg</span>
+                  <span className="font-semibold text-gray-900">{package_.weight_kg || '—'} kg</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Shipping Cost:</span>
                   <span className="font-semibold text-gray-900">
-                    KES {package_.shippingCost?.toLocaleString() || 0}
+                    KES {package_.estimated_cost?.toLocaleString() || 0}
                   </span>
                 </div>
                 {package_.description && (
