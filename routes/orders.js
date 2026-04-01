@@ -49,7 +49,7 @@ router.get('/', authMiddleware, (req, res) => {
 
 /**
  * POST /api/orders
- * Creates order and triggers referral credit if this is the referee's first order.
+ * Creates an order and triggers the referral reward if this is the referee's first order.
  */
 router.post('/', authMiddleware, (req, res) => {
   try {
@@ -80,72 +80,73 @@ router.post('/', authMiddleware, (req, res) => {
     const orderId = uuidv4();
     const trackingNumber = generateTrackingNumber();
 
-    db.prepare(`
-      INSERT INTO orders (
-        id, user_id, tracking_number, retailer, market, status,
-        description, weight_kg, dimensions_json, shipping_speed,
-        insurance, declared_value, estimated_cost
-      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      orderId, userId, trackingNumber, retailer, market,
-      description, weight_kg || null,
-      dimensions ? JSON.stringify(dimensions) : null,
-      speed, insurance ? 1 : 0, declared_value || 0,
-      costBreakdown.total
-    );
+    // Wrap everything in a transaction so order + referral credit are atomic
+    const createOrderTx = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO orders (
+          id, user_id, tracking_number, retailer, market, status,
+          description, weight_kg, dimensions_json, shipping_speed,
+          insurance, declared_value, estimated_cost
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        orderId, userId, trackingNumber, retailer, market,
+        description, weight_kg || null,
+        dimensions ? JSON.stringify(dimensions) : null,
+        speed, insurance ? 1 : 0, declared_value || 0,
+        costBreakdown.total
+      );
 
-    db.prepare(`
-      INSERT INTO packages (id, order_id, user_id, description, weight_kg, status)
-      VALUES (?, ?, ?, ?, ?, 'pending')
-    `).run(uuidv4(), orderId, userId, description, weight_kg || null);
+      db.prepare(`
+        INSERT INTO packages (id, order_id, user_id, description, weight_kg, status)
+        VALUES (?, ?, ?, ?, ?, 'pending')
+      `).run(uuidv4(), orderId, userId, description, weight_kg || null);
 
-    // ── Referral reward logic ──────────────────────────────────────────────────
-    // Check if this user was referred and the referral is still pending
-    const pendingReferral = db.prepare(`
-      SELECT id, referrer_id FROM referrals
-      WHERE referee_id = ? AND status = 'pending'
-      LIMIT 1
-    `).get(userId);
+      // ── Referral reward logic ──────────────────────────────────────────────
+      // Only fires when the referee places their very first order
+      const pendingReferral = db.prepare(`
+        SELECT id, referrer_id, reward_amount
+        FROM referrals
+        WHERE referee_id = ? AND status = 'pending'
+        LIMIT 1
+      `).get(userId);
 
-    if (pendingReferral) {
-      // Check this is truly their first order (count before this insert resolves to 1)
-      const orderCount = db.prepare(
-        'SELECT COUNT(*) as cnt FROM orders WHERE user_id = ?'
-      ).get(userId).cnt;
+      if (pendingReferral) {
+        // Count includes the order just inserted above
+        const orderCount = db.prepare(
+          'SELECT COUNT(*) as cnt FROM orders WHERE user_id = ?'
+        ).get(userId).cnt;
 
-      // orderCount is 1 because the INSERT above already committed
-      if (orderCount === 1) {
-        const REFERRAL_REWARD = 50;
+        if (orderCount === 1) {
+          const reward = pendingReferral.reward_amount || 50;
 
-        // Mark referral as completed
-        db.prepare(`
-          UPDATE referrals SET status = 'completed', completed_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(pendingReferral.id);
+          // Mark referral completed
+          db.prepare(`
+            UPDATE referrals
+            SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(pendingReferral.id);
 
-        // Credit the referrer's wallet_balance column
-        db.prepare(`
-          UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?
-        `).run(REFERRAL_REWARD, pendingReferral.referrer_id);
+          // Credit referrer's wallet_balance
+          db.prepare(
+            'UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?'
+          ).run(reward, pendingReferral.referrer_id);
 
-        // Also update wallet table if it exists
-        db.prepare(`
-          UPDATE wallet SET balance = balance + ? WHERE user_id = ?
-        `).run(REFERRAL_REWARD, pendingReferral.referrer_id);
+          // Sync wallet table
+          db.prepare(
+            'UPDATE wallet SET balance = balance + ?, last_updated = CURRENT_TIMESTAMP WHERE user_id = ?'
+          ).run(reward, pendingReferral.referrer_id);
 
-        // Create transaction record for the referrer
-        db.prepare(`
-          INSERT INTO transactions (id, user_id, type, amount, currency, payment_method, status, description)
-          VALUES (?, ?, 'referral_credit', ?, 'KES', 'wallet', 'completed', ?)
-        `).run(
-          uuidv4(),
-          pendingReferral.referrer_id,
-          REFERRAL_REWARD,
-          `Referral reward — referred user placed first order`
-        );
+          // Record transaction — only columns that exist in the schema
+          db.prepare(`
+            INSERT INTO transactions (id, user_id, type, amount, currency, payment_method, status)
+            VALUES (?, ?, 'referral_credit', ?, 'KES', 'wallet', 'completed')
+          `).run(uuidv4(), pendingReferral.referrer_id, reward);
+        }
       }
-    }
-    // ── End referral logic ────────────────────────────────────────────────────
+      // ── End referral logic ─────────────────────────────────────────────────
+    });
+
+    createOrderTx();
 
     res.status(201).json({
       success: true,

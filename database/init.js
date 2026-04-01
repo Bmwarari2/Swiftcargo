@@ -109,6 +109,7 @@ export function initializeDatabase() {
       referral_code TEXT UNIQUE NOT NULL,
       status TEXT CHECK(status IN ('pending', 'completed')) DEFAULT 'pending',
       reward_amount REAL DEFAULT 50,
+      completed_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(referrer_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY(referee_id) REFERENCES users(id) ON DELETE SET NULL
@@ -197,7 +198,17 @@ export function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
     CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+    CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_id);
+    CREATE INDEX IF NOT EXISTS idx_referrals_referee_id ON referrals(referee_id);
+    CREATE INDEX IF NOT EXISTS idx_referrals_status ON referrals(status);
   `);
+
+  // ── Migration: add completed_at to existing referrals tables that predate this column
+  try {
+    db.exec(`ALTER TABLE referrals ADD COLUMN completed_at DATETIME`);
+  } catch (e) {
+    // Column already exists — safe to ignore
+  }
 
   return db;
 }
