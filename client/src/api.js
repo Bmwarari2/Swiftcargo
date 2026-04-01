@@ -1,30 +1,15 @@
-import axios from 'axios'
-
-const api = axios.create({
-  baseURL: '/api',
-})
-
-api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  (error) => Promise.reject(error)
-)
+import api from './api/client'
 
 // Auth
 export const authApi = {
   login: (email, password) => api.post('/auth/login', { email, password }),
   register: (name, email, phone, password, referralCode) =>
-    api.post('/auth/register', { name, email, phone, password, referralCode }),
+    api.post('/auth/register', { name, email, phone, password, referral_code: referralCode }),
   me: () => api.get('/auth/me'),
   logout: () => api.post('/auth/logout'),
   updateProfile: (updates) => api.put('/auth/profile', updates),
   changePassword: (currentPassword, newPassword) =>
-    api.post('/auth/change-password', { currentPassword, newPassword }),
+    api.put('/auth/password', { current_password: currentPassword, new_password: newPassword }),
 }
 
 // Orders
@@ -111,26 +96,29 @@ export const referralApi = {
 // Admin
 export const adminApi = {
   getDashboardStats: () => api.get('/admin/stats'),
-  getOrdersChart: () => api.get('/admin/orders-chart'),
-  getRevenueChart: () => api.get('/admin/revenue-chart'),
-  getOrdersByMarket: () => api.get('/admin/orders-by-market'),
 
   listUsers: (filters = {}) => api.get('/admin/users', { params: filters }),
   getUser: (id) => api.get(`/admin/users/${id}`),
-  updateUserRole: (id, role) => api.put(`/admin/users/${id}`, { role }),
+  updateUser: (id, data) => api.put(`/admin/users/${id}`, data),
 
-  listAllOrders: (filters = {}) => api.get('/admin/orders', { params: filters }),
+  listOrders: (filters = {}) => api.get('/admin/orders', { params: filters }),
   bulkUpdateOrders: (orderIds, status) =>
-    api.put('/admin/orders/bulk-update', { orderIds, status }),
+    api.put('/admin/orders/bulk-update', { order_ids: orderIds, status }),
 
-  getRevenueReport: (startDate, endDate) =>
-    api.get('/admin/revenue-report', { params: { startDate, endDate } }),
+  getRevenue: (startDate, endDate) =>
+    api.get('/admin/revenue', { params: { startDate, endDate } }),
+  exportRevenue: (startDate, endDate) =>
+    api.get('/admin/revenue/export', { params: { startDate, endDate }, responseType: 'blob' }),
 
   listTickets: (filters = {}) => api.get('/admin/tickets', { params: filters }),
   assignTicket: (id, assignedTo) =>
     api.put(`/admin/tickets/${id}`, { assignedTo }),
   updateTicketStatus: (id, status) =>
     api.put(`/admin/tickets/${id}`, { status }),
+
+  // Exchange rate management
+  getExchangeRates: () => api.get('/admin/exchange-rates'),
+  setExchangeRates: (rates) => api.put('/admin/exchange-rates', { rates }),
 }
 
 export default api
