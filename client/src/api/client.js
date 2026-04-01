@@ -54,8 +54,22 @@ api.interceptors.response.use(
       clearSession()
       window.location.href = '/login'
     }
-    const message =
-      error.response?.data?.message || error.message || 'Something went wrong'
+
+    // Safely extract the error message — the response body may be plain text
+    // (e.g. from express-rate-limit before our JSON handler fix) or JSON.
+    let message = 'Something went wrong'
+    const data = error.response?.data
+    if (data) {
+      if (typeof data === 'string' && data.length < 200) {
+        // Plain-text body (e.g. old rate-limit response)
+        message = data
+      } else if (typeof data === 'object' && data.message) {
+        message = data.message
+      }
+    } else if (error.message) {
+      message = error.message
+    }
+
     return Promise.reject(new Error(message))
   }
 )
