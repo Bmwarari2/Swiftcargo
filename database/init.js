@@ -4,35 +4,95 @@ dotenv.config();
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
-  throw new Error('DATABASE_URL environment variable is required. Add your Supabase connection string.');
+// ── Validate DATABASE_URL before anything else ──────────────────────────────
+const rawUrl = process.env.DATABASE_URL;
+
+if (!rawUrl) {
+  console.error(`
+╔══════════════════════════════════════════════════════════════════╗
+║  FATAL: DATABASE_URL is not set                                  ║
+║                                                                  ║
+║  Steps to fix:                                                   ║
+║  1. Go to supabase.com → your project → Settings → Database      ║
+║  2. Copy the "Connection string" (URI format)                    ║
+║  3. In Railway: your service → Variables → add DATABASE_URL      ║
+║                                                                  ║
+║  Expected format:                                                ║
+║  postgresql://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres ║
+╚══════════════════════════════════════════════════════════════════╝
+  `);
+  process.exit(1);
+}
+
+// Validate it is a real URL before pg even tries to parse it
+try {
+  const parsed = new URL(rawUrl);
+  if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
+    throw new Error(`Protocol must be postgres:// or postgresql://, got: ${parsed.protocol}`);
+  }
+  console.log(`✓ DATABASE_URL validated — host: ${parsed.hostname}`);
+} catch (err) {
+  console.error(`
+╔══════════════════════════════════════════════════════════════════╗
+║  FATAL: DATABASE_URL is set but is not a valid PostgreSQL URL    ║
+║                                                                  ║
+║  Error: ${err.message.padEnd(54)}║
+║                                                                  ║
+║  Common mistakes:                                                ║
+║  • Password contains special chars — URL-encode them             ║
+║    e.g. @ → %40   # → %23   $ → %24   & → %26                   ║
+║  • Missing protocol (must start with postgresql://)              ║
+║  • Copied the "Direct connection" string with [YOUR-PASSWORD]    ║
+║    placeholder still in it — replace it with your real password  ║
+║                                                                  ║
+║  Expected format:                                                ║
+║  postgresql://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres ║
+╚══════════════════════════════════════════════════════════════════╝
+  `);
+  process.exit(1);
 }
 
 /**
  * PostgreSQL connection pool (Supabase)
- * Set DATABASE_URL in your environment variables.
- * Format: postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres
+ * Uses the DATABASE_URL environment variable.
+ * SSL is required for Supabase — rejectUnauthorized:false handles self-signed certs.
  */
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false  // Required for Supabase/Railway SSL connections
-  },
+  connectionString: rawUrl,
+  ssl: { rejectUnauthorized: false },
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
 });
 
 pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL pool error:', err);
+  console.error('Unexpected PostgreSQL pool error:', err.message);
 });
 
 /**
  * Run the schema migration (CREATE TABLE IF NOT EXISTS).
- * Safe to run on every startup — uses IF NOT EXISTS so existing data is never lost.
+ * Safe to call on every startup — never drops or truncates data.
  */
 export async function initializeDatabase() {
-  const client = await pool.connect();
+  let client;
+  try {
+    client = await pool.connect();
+  } catch (err) {
+    console.error(`
+╔══════════════════════════════════════════════════════════════════╗
+║  FATAL: Could not connect to the database                        ║
+║                                                                  ║
+║  Check that:                                                     ║
+║  1. Your DATABASE_URL password is correct                        ║
+║  2. Your Supabase project is active (not paused)                 ║
+║  3. The host/port in the URL is correct                          ║
+║                                                                  ║
+║  Error: ${err.message.substring(0, 54).padEnd(54)}║
+╚══════════════════════════════════════════════════════════════════╝
+    `);
+    throw err;
+  }
+
   try {
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -184,7 +244,6 @@ export async function initializeDatabase() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
 
-      -- Indexes (IF NOT EXISTS supported in PG 9.5+)
       CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
       CREATE INDEX IF NOT EXISTS idx_orders_tracking_number ON orders(tracking_number);
       CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
@@ -206,10 +265,6 @@ export async function initializeDatabase() {
   return pool;
 }
 
-/**
- * Returns the shared connection pool.
- * Import this wherever you need to run queries.
- */
 export function getPool() {
   return pool;
 }
