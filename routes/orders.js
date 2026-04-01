@@ -264,7 +264,7 @@ router.put('/:id', authMiddleware, isAdmin, (req, res) => {
     const params = [];
 
     if (status) {
-      if (!['pending', 'received_at_warehouse', 'consolidating', 'in_transit', 'customs', 'out_for_delivery', 'delivered'].includes(status)) {
+      if (!['pending', 'received_at_warehouse', 'consolidating', 'in_transit', 'customs', 'out_for_delivery', 'delivered', 'cancelled'].includes(status)) {
         return res.status(400).json({
           success: false,
           message: 'Invalid status'
