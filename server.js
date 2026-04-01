@@ -145,17 +145,23 @@ app.use(express.static(path.join(__dirname, 'client', 'dist')));
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
-  message: 'Too many requests from this IP, please try again later.',
+  message: { success: false, message: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
+// Auth rate limiter — raised to 20 attempts per 15 min to avoid
+// locking out legitimate users during normal use and development.
+// Returns a proper JSON body so the frontend can show a clear message.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: 'Too many login attempts, please try again later.',
+  max: 20,
+  message: { success: false, message: 'Too many login attempts. Please wait 15 minutes and try again.' },
   standardHeaders: true,
   legacyHeaders: false,
+  handler: (req, res, next, options) => {
+    res.status(options.statusCode).json(options.message);
+  },
 });
 
 app.use('/api/', limiter);
@@ -187,7 +193,7 @@ app.use('/api/pricing', pricingRoutes);
 app.use('/api/consolidation', consolidationRoutes);
 app.use('/api/prohibited', prohibitedRoutes);
 
-app.get(/^(?!\/api).*/, (req, res) => {
+app.get(/^\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
 });
 
