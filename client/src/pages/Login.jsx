@@ -25,7 +25,6 @@ export const Login = () => {
     e.preventDefault()
     setError(null)
 
-    // Validation
     if (!formData.email) {
       setError(t('common.required'))
       return
@@ -37,9 +36,9 @@ export const Login = () => {
 
     try {
       setLoading(true)
-      await login(formData.email, formData.password)
+      const loggedInUser = await login(formData.email, formData.password)
       toast.success(t('auth.loginSuccess'))
-      navigate('/dashboard')
+      navigate(loggedInUser.role === 'admin' ? '/admin' : '/dashboard')
     } catch (err) {
       setError(err.message)
       toast.error(err.message)
@@ -52,7 +51,6 @@ export const Login = () => {
     <div className="min-h-screen bg-gradient-to-br from-[#1e3a5f] to-[#152d4a] flex items-center justify-center px-4 py-8">
       <div className="w-full max-w-md">
         <div className="bg-white rounded-xl shadow-xl p-8">
-          {/* Header */}
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-[#1e3a5f] mb-2">
               <span>Swift</span>
@@ -61,7 +59,6 @@ export const Login = () => {
             <p className="text-gray-600">{t('auth.login')}</p>
           </div>
 
-          {/* Error Alert */}
           {error && (
             <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
               <AlertCircle className="text-red-600 flex-shrink-0 mt-0.5" size={20} />
@@ -69,9 +66,7 @@ export const Login = () => {
             </div>
           )}
 
-          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Email */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 {t('auth.email')}
@@ -89,7 +84,6 @@ export const Login = () => {
               </div>
             </div>
 
-            {/* Password */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 {t('auth.password')}
@@ -107,14 +101,12 @@ export const Login = () => {
               </div>
             </div>
 
-            {/* Forgot Password Link */}
             <div className="text-right">
               <a href="#" className="text-sm text-orange-500 hover:text-orange-600">
                 {t('auth.forgotPassword')}
               </a>
             </div>
 
-            {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
@@ -124,14 +116,12 @@ export const Login = () => {
             </button>
           </form>
 
-          {/* Divider */}
           <div className="my-6 flex items-center gap-4">
             <div className="flex-1 h-px bg-gray-300"></div>
             <span className="text-gray-500 text-sm">OR</span>
             <div className="flex-1 h-px bg-gray-300"></div>
           </div>
 
-          {/* Register Link */}
           <p className="text-center text-gray-600">
             {t('auth.noAccount')}{' '}
             <Link to="/register" className="text-orange-500 hover:text-orange-600 font-bold">
