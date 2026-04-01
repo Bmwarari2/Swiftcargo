@@ -152,6 +152,15 @@ export function initializeDatabase() {
       FOREIGN KEY(admin_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
+    CREATE TABLE IF NOT EXISTS exchange_rates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      currency_pair TEXT UNIQUE NOT NULL,
+      rate REAL NOT NULL,
+      updated_by TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
     CREATE INDEX IF NOT EXISTS idx_orders_tracking_number ON orders(tracking_number);
     CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
