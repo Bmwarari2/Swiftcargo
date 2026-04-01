@@ -89,6 +89,7 @@ export function AuthProvider({ children }) {
     logout,
     updateProfile,
     isAdmin: user?.role === 'admin',
+    isAuthenticated: !!user,  // ✅ FIX: expose isAuthenticated so ProtectedRoute works correctly
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
@@ -97,7 +98,7 @@ export function AuthProvider({ children }) {
 /**
  * useAuth – consume auth state anywhere inside AuthProvider:
  *
- *   const { user, login, logout, isAdmin } = useAuth()
+ *   const { user, login, logout, isAdmin, isAuthenticated } = useAuth()
  */
 export function useAuth() {
   const ctx = useContext(AuthContext)
