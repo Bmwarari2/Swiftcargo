@@ -25,6 +25,41 @@ import {
 } from 'recharts'
 import toast from 'react-hot-toast'
 
+function PasswordField({
+  label,
+  name,
+  visible,
+  value,
+  onChange,
+  onToggleVisibility,
+  placeholder,
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-semibold text-gray-700 mb-2">{label}</label>
+      <div className="relative">
+        <Lock className="absolute left-3 top-3 text-gray-400" size={18} />
+        <input
+          type={visible ? 'text' : 'password'}
+          name={name}
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          className="w-full pl-10 pr-12 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
+        />
+        <button
+          type="button"
+          onClick={onToggleVisibility}
+          className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
+          aria-label={visible ? 'Hide password' : 'Show password'}
+        >
+          {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export const AdminDashboard = () => {
   const { t } = useLanguage()
   const [loading, setLoading] = useState(true)
@@ -128,32 +163,26 @@ export const AdminDashboard = () => {
       toast.error('Please fill in all password fields')
       return false
     }
-
     if (new_password.length < 8) {
       toast.error('New password must be at least 8 characters long')
       return false
     }
-
     if (!/[A-Z]/.test(new_password)) {
       toast.error('New password must include at least one uppercase letter')
       return false
     }
-
     if (!/[a-z]/.test(new_password)) {
       toast.error('New password must include at least one lowercase letter')
       return false
     }
-
     if (!/[0-9]/.test(new_password)) {
       toast.error('New password must include at least one number')
       return false
     }
-
     if (new_password !== confirm_password) {
       toast.error('New password and confirmation do not match')
       return false
     }
-
     if (current_password === new_password) {
       toast.error('New password must be different from the current password')
       return false
@@ -173,7 +202,6 @@ export const AdminDashboard = () => {
         passwordForm.current_password,
         passwordForm.new_password
       )
-
       toast.success('Password changed successfully')
       setPasswordForm({
         current_password: '',
@@ -197,31 +225,6 @@ export const AdminDashboard = () => {
 
   const COLORS = ['#1e3a5f', '#f97316', '#10b981', '#6366f1']
   const tabs = ['overview', 'users', 'orders', 'revenue', 'tickets', 'security']
-
-  const PasswordField = ({ label, name, visibleKey, placeholder }) => (
-    <div>
-      <label className="block text-sm font-semibold text-gray-700 mb-2">{label}</label>
-      <div className="relative">
-        <Lock className="absolute left-3 top-3 text-gray-400" size={18} />
-        <input
-          type={showPasswords[visibleKey] ? 'text' : 'password'}
-          name={name}
-          value={passwordForm[name]}
-          onChange={handlePasswordInputChange}
-          placeholder={placeholder}
-          className="w-full pl-10 pr-12 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-        />
-        <button
-          type="button"
-          onClick={() => togglePasswordVisibility(visibleKey)}
-          className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
-          aria-label={showPasswords[visibleKey] ? 'Hide password' : 'Show password'}
-        >
-          {showPasswords[visibleKey] ? <EyeOff size={18} /> : <Eye size={18} />}
-        </button>
-      </div>
-    </div>
-  )
 
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4">
@@ -508,19 +511,28 @@ export const AdminDashboard = () => {
                 <PasswordField
                   label="Current password"
                   name="current_password"
-                  visibleKey="current"
+                  visible={showPasswords.current}
+                  value={passwordForm.current_password}
+                  onChange={handlePasswordInputChange}
+                  onToggleVisibility={() => togglePasswordVisibility('current')}
                   placeholder="Enter your current password"
                 />
                 <PasswordField
                   label="New password"
                   name="new_password"
-                  visibleKey="next"
+                  visible={showPasswords.next}
+                  value={passwordForm.new_password}
+                  onChange={handlePasswordInputChange}
+                  onToggleVisibility={() => togglePasswordVisibility('next')}
                   placeholder="Create a strong new password"
                 />
                 <PasswordField
                   label="Confirm new password"
                   name="confirm_password"
-                  visibleKey="confirm"
+                  visible={showPasswords.confirm}
+                  value={passwordForm.confirm_password}
+                  onChange={handlePasswordInputChange}
+                  onToggleVisibility={() => togglePasswordVisibility('confirm')}
                   placeholder="Re-enter your new password"
                 />
 
