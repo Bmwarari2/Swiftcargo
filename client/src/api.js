@@ -19,7 +19,7 @@ export const ordersApi = {
   create: (data) => api.post('/orders', data),
   update: (id, data) => api.put(`/orders/${id}`, data),
   delete: (id) => api.delete(`/orders/${id}`),
-  track: (trackingNumber) => api.get(`/orders/track/${trackingNumber}`),
+  track: (trackingNumber) => api.get(`/tracking/${trackingNumber}`),
 }
 
 // Wallet
@@ -33,13 +33,14 @@ export const walletApi = {
 
 // Pricing
 export const pricingApi = {
-  calculate: (market, weight, dimensions, shippingSpeed, insurance) =>
+  calculate: (market, weight_kg, dimensions, shipping_speed, insurance, declared_value) =>
     api.post('/pricing/calculate', {
       market,
-      weight,
+      weight_kg,
       dimensions,
-      shippingSpeed,
-      insurance,
+      shipping_speed,
+      insurance: insurance?.enabled || false,
+      declared_value: insurance?.declaredValue || declared_value || 0,
     }),
   getExchangeRates: () => api.get('/pricing/exchange-rates'),
 }
@@ -100,8 +101,15 @@ export const adminApi = {
   listUsers: (filters = {}) => api.get('/admin/users', { params: filters }),
   getUser: (id) => api.get(`/admin/users/${id}`),
   updateUser: (id, data) => api.put(`/admin/users/${id}`, data),
+  resetUserPassword: (id) => api.post(`/admin/users/${id}/reset-password`),
 
   listOrders: (filters = {}) => api.get('/admin/orders', { params: filters }),
+  deleteOrder: (id) => api.delete(`/admin/orders/${id}`),
+  cancelOrder: (id, reason) => api.put(`/admin/orders/${id}/cancel`, { reason }),
+  createOrderForClient: (data) => api.post('/admin/orders/create-for-client', data),
+  requestPayment: (orderId, amount, notes) =>
+    api.post(`/admin/orders/${orderId}/request-payment`, { amount, notes }),
+  searchCustomers: (query) => api.get('/admin/users/search', { params: { q: query } }),
   bulkUpdateOrders: (orderIds, status) =>
     api.put('/admin/orders/bulk-update', { order_ids: orderIds, status }),
 
@@ -119,6 +127,11 @@ export const adminApi = {
   // Exchange rate management
   getExchangeRates: () => api.get('/admin/exchange-rates'),
   setExchangeRates: (rates) => api.put('/admin/exchange-rates', { rates }),
+
+  // Backups
+  listBackups: (filters = {}) => api.get('/admin/backups', { params: filters }),
+  createBackup: () => api.post('/admin/backups'),
+  downloadBackup: (id) => api.get(`/admin/backups/${id}/download`, { responseType: 'blob' }),
 }
 
 export default api
