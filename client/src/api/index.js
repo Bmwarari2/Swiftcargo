@@ -114,8 +114,11 @@ export const adminApi = {
   /** Update a user's role or active status */
   updateUser: (id, data) => api.put(`/admin/users/${id}`, data),
 
-  /** List all support tickets (via admin orders endpoint or tickets) */
-  listTickets: (params = {}) => api.get('/admin/orders', { params }),
+  /** List all orders for the orders management table */
+  listOrders: (params = {}) => api.get('/admin/orders', { params }),
+
+  /** List all support tickets */
+  listTickets: (params = {}) => api.get('/tickets', { params }),
 
   /**
    * Bulk-update multiple orders to a new status.
