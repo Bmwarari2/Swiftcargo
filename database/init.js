@@ -43,7 +43,7 @@ export function initializeDatabase() {
       tracking_number TEXT UNIQUE NOT NULL,
       retailer TEXT NOT NULL,
       market TEXT CHECK(market IN ('UK', 'USA', 'China')) NOT NULL,
-      status TEXT CHECK(status IN ('pending', 'received_at_warehouse', 'consolidating', 'in_transit', 'customs', 'out_for_delivery', 'delivered')) DEFAULT 'pending',
+      status TEXT CHECK(status IN ('pending', 'received_at_warehouse', 'consolidating', 'in_transit', 'customs', 'out_for_delivery', 'delivered', 'cancelled')) DEFAULT 'pending',
       description TEXT NOT NULL,
       weight_kg REAL,
       dimensions_json TEXT,
@@ -160,6 +160,30 @@ export function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token TEXT UNIQUE NOT NULL,
+      expires_at DATETIME NOT NULL,
+      used BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_password_reset_token ON password_reset_tokens(token);
+
+    CREATE TABLE IF NOT EXISTS backups (
+      id TEXT PRIMARY KEY,
+      filename TEXT NOT NULL,
+      filepath TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      checksum TEXT NOT NULL,
+      status TEXT CHECK(status IN ('completed', 'failed', 'in_progress')) DEFAULT 'in_progress',
+      created_by TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_backups_created_at ON backups(created_at);
 
     CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
     CREATE INDEX IF NOT EXISTS idx_orders_tracking_number ON orders(tracking_number);
