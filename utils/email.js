@@ -1,7 +1,9 @@
-import nodemailer from 'nodemailer';
-
 /**
  * Email service using Google Workspace SMTP.
+ *
+ * nodemailer is loaded lazily via dynamic import so the server can
+ * start even when the package is not installed. Email-sending calls
+ * will log a warning and resolve gracefully in that case.
  *
  * Required environment variables:
  *   SMTP_HOST       – e.g. smtp.gmail.com
@@ -15,8 +17,23 @@ import nodemailer from 'nodemailer';
 
 let transporter = null;
 
-function getTransporter() {
+// Lazy-load nodemailer: resolves to the module or null if not installed
+const nodemailerPromise = import('nodemailer')
+  .then(mod => mod.default || mod)
+  .catch(() => {
+    console.warn('⚠ nodemailer is not installed — email features will be disabled. Run: npm install nodemailer');
+    return null;
+  });
+
+async function getTransporter() {
   if (transporter) return transporter;
+
+  const nodemailer = await nodemailerPromise;
+  if (!nodemailer) {
+    throw new Error(
+      'nodemailer is not installed. Run: npm install nodemailer'
+    );
+  }
 
   const host = process.env.SMTP_HOST || 'smtp.gmail.com';
   const port = parseInt(process.env.SMTP_PORT || '465', 10);
@@ -50,7 +67,7 @@ function getFromAddress() {
  * @returns {Promise<object>}  – Nodemailer send result
  */
 export async function sendPasswordResetEmail(toEmail, toName, resetLink) {
-  const transport = getTransporter();
+  const transport = await getTransporter();
 
   const mailOptions = {
     from: getFromAddress(),
@@ -135,7 +152,7 @@ export async function sendPasswordResetEmail(toEmail, toName, resetLink) {
  * Same email as user-initiated, but with slightly different wording.
  */
 export async function sendAdminPasswordResetEmail(toEmail, toName, resetLink) {
-  const transport = getTransporter();
+  const transport = await getTransporter();
 
   const mailOptions = {
     from: getFromAddress(),
@@ -227,7 +244,7 @@ export async function sendAdminPasswordResetEmail(toEmail, toName, resetLink) {
  * @returns {Promise<object>}      – Nodemailer send result
  */
 export async function sendPaymentRequestEmail(toEmail, toName, trackingNumber, amount, notes, paymentLink) {
-  const transport = getTransporter();
+  const transport = await getTransporter();
 
   const mailOptions = {
     from: getFromAddress(),
