@@ -10,7 +10,6 @@ export const NewOrder = () => {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [rates, setRates] = useState({})
   const [formData, setFormData] = useState({
     market: 'UK',
     retailer: '',
@@ -29,18 +28,6 @@ export const NewOrder = () => {
 
   const retailers = ['Shein', 'Amazon', 'Next', 'Asos', 'Superdrug', 'eBay', 'ZARA', 'H&M']
 
-  useEffect(() => {
-    const fetchRates = async () => {
-      try {
-        const response = await pricingApi.getExchangeRates()
-        setRates(response.data)
-      } catch (err) {
-        console.error('Failed to load rates')
-      }
-    }
-    fetchRates()
-  }, [])
-
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target
     setFormData((prev) => ({
@@ -51,10 +38,10 @@ export const NewOrder = () => {
 
   const handleCalculateEstimate = async () => {
     if (!formData.weight) {
-      setError(t('common.required'))
+      setError('Please enter a weight to calculate the estimate')
       return
     }
-
+    setError(null)
     try {
       const response = await pricingApi.calculate(
         formData.market,
@@ -79,23 +66,10 @@ export const NewOrder = () => {
     e.preventDefault()
     setError(null)
 
-    // Validation
-    if (!formData.market) {
-      setError(t('common.required'))
-      return
-    }
-    if (!formData.retailer && !formData.retailerOther) {
-      setError(t('common.required'))
-      return
-    }
-    if (!formData.description) {
-      setError(t('common.required'))
-      return
-    }
-    if (!formData.weight) {
-      setError(t('common.required'))
-      return
-    }
+    if (!formData.market) { setError(t('common.required')); return }
+    if (!formData.retailer && !formData.retailerOther) { setError(t('common.required')); return }
+    if (!formData.description) { setError(t('common.required')); return }
+    if (!formData.weight) { setError(t('common.required')); return }
 
     try {
       setLoading(true)
@@ -115,11 +89,19 @@ export const NewOrder = () => {
         declared_value: formData.insurance ? parseFloat(formData.declaredValue) || 0 : 0,
       })
 
-      toast.success(t('common.success'))
-      navigate(`/orders/${response.data.order.id}`)
+      toast.success('Order created successfully!')
+      // Navigate to confirmation page, passing the order + pricing data via router state
+      navigate('/orders/confirmation', {
+        replace: true,
+        state: {
+          order: response.data.order,
+          pricing: estimate,
+        },
+      })
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to create order')
-      toast.error(err.response?.data?.message || 'Failed to create order')
+      const msg = err.message || 'Failed to create order'
+      setError(msg)
+      toast.error(msg)
     } finally {
       setLoading(false)
     }
@@ -153,13 +135,8 @@ export const NewOrder = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('neworder.market')} *
                   </label>
-                  <select
-                    name="market"
-                    value={formData.market}
-                    onChange={handleChange}
-                    required
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                  >
+                  <select name="market" value={formData.market} onChange={handleChange} required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent">
                     <option value="UK">United Kingdom</option>
                     <option value="USA">United States</option>
                     <option value="China">China</option>
@@ -171,37 +148,20 @@ export const NewOrder = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('neworder.retailer')} *
                   </label>
-                  <select
-                    name="retailer"
-                    value={formData.retailer}
-                    onChange={handleChange}
-                    required
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                  >
+                  <select name="retailer" value={formData.retailer} onChange={handleChange} required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent">
                     <option value="">{t('neworder.retailerPlaceholder')}</option>
-                    {retailers.map((retailer) => (
-                      <option key={retailer} value={retailer}>
-                        {retailer}
-                      </option>
-                    ))}
+                    {retailers.map((r) => <option key={r} value={r}>{r}</option>)}
                     <option value="other">{t('neworder.other')}</option>
                   </select>
                 </div>
 
-                {/* Other Retailer */}
                 {formData.retailer === 'other' && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Retailer Name *
-                    </label>
-                    <input
-                      type="text"
-                      name="retailerOther"
-                      value={formData.retailerOther}
-                      onChange={handleChange}
-                      placeholder="Enter retailer name"
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                    />
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Retailer Name *</label>
+                    <input type="text" name="retailerOther" value={formData.retailerOther}
+                      onChange={handleChange} placeholder="Enter retailer name"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent" />
                   </div>
                 )}
 
@@ -210,15 +170,9 @@ export const NewOrder = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('neworder.description')} *
                   </label>
-                  <textarea
-                    name="description"
-                    value={formData.description}
-                    onChange={handleChange}
-                    placeholder="e.g., Blue hoodie size M, black shoes size 10"
-                    rows="3"
-                    required
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                  />
+                  <textarea name="description" value={formData.description} onChange={handleChange}
+                    placeholder="e.g., Blue hoodie size M, black shoes size 10" rows="3" required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent" />
                 </div>
 
                 {/* Weight */}
@@ -226,17 +180,9 @@ export const NewOrder = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('neworder.weight')} *
                   </label>
-                  <input
-                    type="number"
-                    name="weight"
-                    value={formData.weight}
-                    onChange={handleChange}
-                    step="0.1"
-                    min="0"
-                    placeholder="1.5"
-                    required
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                  />
+                  <input type="number" name="weight" value={formData.weight} onChange={handleChange}
+                    step="0.1" min="0" placeholder="1.5" required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent" />
                 </div>
 
                 {/* Dimensions */}
@@ -245,36 +191,12 @@ export const NewOrder = () => {
                     {t('neworder.dimensions')}
                   </label>
                   <div className="grid grid-cols-3 gap-2">
-                    <input
-                      type="number"
-                      name="length"
-                      placeholder="Length (cm)"
-                      value={formData.length}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0"
-                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent text-sm"
-                    />
-                    <input
-                      type="number"
-                      name="width"
-                      placeholder="Width (cm)"
-                      value={formData.width}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0"
-                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent text-sm"
-                    />
-                    <input
-                      type="number"
-                      name="height"
-                      placeholder="Height (cm)"
-                      value={formData.height}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0"
-                      className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent text-sm"
-                    />
+                    {['length', 'width', 'height'].map((dim) => (
+                      <input key={dim} type="number" name={dim}
+                        placeholder={`${dim.charAt(0).toUpperCase() + dim.slice(1)} (cm)`}
+                        value={formData[dim]} onChange={handleChange} step="0.1" min="0"
+                        className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent text-sm" />
+                    ))}
                   </div>
                 </div>
 
@@ -284,62 +206,32 @@ export const NewOrder = () => {
                     {t('neworder.shippingSpeed')}
                   </label>
                   <div className="flex gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="shippingSpeed"
-                        value="economy"
-                        checked={formData.shippingSpeed === 'economy'}
-                        onChange={handleChange}
-                        className="w-4 h-4 text-[#1e3a5f]"
-                      />
-                      <span className="text-gray-700">Economy (7-14 days)</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="shippingSpeed"
-                        value="express"
-                        checked={formData.shippingSpeed === 'express'}
-                        onChange={handleChange}
-                        className="w-4 h-4 text-[#1e3a5f]"
-                      />
-                      <span className="text-gray-700">Express (3-5 days)</span>
-                    </label>
+                    {[['economy', 'Economy (7-14 days)'], ['express', 'Express (3-5 days)']].map(([val, label]) => (
+                      <label key={val} className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="shippingSpeed" value={val}
+                          checked={formData.shippingSpeed === val} onChange={handleChange}
+                          className="w-4 h-4 text-[#1e3a5f]" />
+                        <span className="text-gray-700">{label}</span>
+                      </label>
+                    ))}
                   </div>
                 </div>
 
                 {/* Insurance */}
                 <div>
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      name="insurance"
-                      checked={formData.insurance}
-                      onChange={handleChange}
-                      className="w-4 h-4 text-[#1e3a5f]"
-                    />
-                    <span className="text-sm font-medium text-gray-700">
-                      {t('neworder.insurance')}
-                    </span>
+                    <input type="checkbox" name="insurance" checked={formData.insurance}
+                      onChange={handleChange} className="w-4 h-4 text-[#1e3a5f]" />
+                    <span className="text-sm font-medium text-gray-700">{t('neworder.insurance')}</span>
                   </label>
                 </div>
 
-                {/* Declared Value */}
                 {formData.insurance && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Declared Value (KES)
-                    </label>
-                    <input
-                      type="number"
-                      name="declaredValue"
-                      value={formData.declaredValue}
-                      onChange={handleChange}
-                      min="0"
-                      placeholder="0"
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                    />
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Declared Value (KES)</label>
+                    <input type="number" name="declaredValue" value={formData.declaredValue}
+                      onChange={handleChange} min="0" placeholder="0"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent" />
                   </div>
                 )}
 
@@ -348,31 +240,18 @@ export const NewOrder = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     {t('neworder.promoCode')}
                   </label>
-                  <input
-                    type="text"
-                    name="promoCode"
-                    value={formData.promoCode}
-                    onChange={handleChange}
+                  <input type="text" name="promoCode" value={formData.promoCode} onChange={handleChange}
                     placeholder="Optional"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                  />
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent" />
                 </div>
 
-                {/* Calculate Estimate Button */}
-                <button
-                  type="button"
-                  onClick={handleCalculateEstimate}
-                  className="w-full bg-gray-800 hover:bg-gray-900 text-white py-2 rounded-lg font-bold transition-colors"
-                >
+                <button type="button" onClick={handleCalculateEstimate}
+                  className="w-full bg-gray-800 hover:bg-gray-900 text-white py-2 rounded-lg font-bold transition-colors">
                   Calculate Estimate
                 </button>
 
-                {/* Submit Button */}
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-[#1e3a5f] hover:bg-[#152d4a] text-white py-3 rounded-lg font-bold transition-colors disabled:opacity-50"
-                >
+                <button type="submit" disabled={loading}
+                  className="w-full bg-[#1e3a5f] hover:bg-[#152d4a] text-white py-3 rounded-lg font-bold transition-colors disabled:opacity-50">
                   {loading ? t('common.loading') : t('neworder.submit')}
                 </button>
               </form>
@@ -382,10 +261,7 @@ export const NewOrder = () => {
           {/* Estimate Sidebar */}
           {estimate && (
             <div className="card bg-orange-50 border border-orange-200 h-fit sticky top-20">
-              <h3 className="text-lg font-bold text-[#1e3a5f] mb-4">
-                {t('neworder.costEstimate')}
-              </h3>
-
+              <h3 className="text-lg font-bold text-[#1e3a5f] mb-4">{t('neworder.costEstimate')}</h3>
               <div className="space-y-3 text-sm">
                 <div className="flex justify-between">
                   <span className="text-gray-700">Base Shipping:</span>

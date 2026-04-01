@@ -5,7 +5,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Use Railway persistent volume when available, otherwise fall back to repo root
+// On Railway: set DATABASE_PATH=/data/swiftcargo.db and mount a volume at /data
 const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '..', 'swiftcargo.db');
+
+console.log(`Database path: ${dbPath}`);
 
 /**
  * Initialize SQLite database with all required tables

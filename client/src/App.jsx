@@ -14,6 +14,7 @@ import { ExchangeRate } from './pages/ExchangeRate'
 import { PricingCalculator } from './pages/PricingCalculator'
 import { Orders } from './pages/Orders'
 import { NewOrder } from './pages/NewOrder'
+import { OrderConfirmation } from './pages/OrderConfirmation'
 import { Wallet } from './pages/Wallet'
 import { Consolidation } from './pages/Consolidation'
 import { ProhibitedItems } from './pages/ProhibitedItems'
@@ -39,103 +40,32 @@ function App() {
           <Route path="/prohibited" element={<ProhibitedItems />} />
 
           {/* Protected Routes */}
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/orders"
-            element={
-              <ProtectedRoute>
-                <Orders />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/orders/new"
-            element={
-              <ProtectedRoute>
-                <NewOrder />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/wallet"
-            element={
-              <ProtectedRoute>
-                <Wallet />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/consolidation"
-            element={
-              <ProtectedRoute>
-                <Consolidation />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/support"
-            element={
-              <ProtectedRoute>
-                <Support />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/referral"
-            element={
-              <ProtectedRoute>
-                <Referral />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/warehouse"
-            element={
-              <ProtectedRoute>
-                <WarehouseAddresses />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
+          {/* /orders/new and /orders/confirmation must come before /orders/:id */}
+          <Route path="/orders/new" element={<ProtectedRoute><NewOrder /></ProtectedRoute>} />
+          <Route path="/orders/confirmation" element={<ProtectedRoute><OrderConfirmation /></ProtectedRoute>} />
+          <Route path="/wallet" element={<ProtectedRoute><Wallet /></ProtectedRoute>} />
+          <Route path="/consolidation" element={<ProtectedRoute><Consolidation /></ProtectedRoute>} />
+          <Route path="/support" element={<ProtectedRoute><Support /></ProtectedRoute>} />
+          <Route path="/referral" element={<ProtectedRoute><Referral /></ProtectedRoute>} />
+          <Route path="/warehouse" element={<ProtectedRoute><WarehouseAddresses /></ProtectedRoute>} />
 
           {/* Admin Routes */}
-          <Route
-            path="/admin"
-            element={
-              <ProtectedRoute adminOnly={true}>
-                <AdminDashboard />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/admin" element={<ProtectedRoute adminOnly={true}><AdminDashboard /></ProtectedRoute>} />
 
           {/* 404 */}
-          <Route
-            path="*"
-            element={
-              <div className="flex items-center justify-center min-h-[50vh]">
-                <div className="text-center">
-                  <h1 className="text-4xl font-bold text-[#1e3a5f] mb-4">
-                    404 - Page Not Found
-                  </h1>
-                  <p className="text-gray-600 mb-8">
-                    The page you're looking for doesn't exist
-                  </p>
-                  <a
-                    href="/"
-                    className="inline-block bg-orange-500 hover:bg-orange-600 text-white px-8 py-3 rounded-lg font-bold transition-colors"
-                  >
-                    Back to Home
-                  </a>
-                </div>
+          <Route path="*" element={
+            <div className="flex items-center justify-center min-h-[50vh]">
+              <div className="text-center">
+                <h1 className="text-4xl font-bold text-[#1e3a5f] mb-4">404 - Page Not Found</h1>
+                <p className="text-gray-600 mb-8">The page you're looking for doesn't exist</p>
+                <a href="/" className="inline-block bg-orange-500 hover:bg-orange-600 text-white px-8 py-3 rounded-lg font-bold transition-colors">
+                  Back to Home
+                </a>
               </div>
-            }
-          />
+            </div>
+          } />
         </Routes>
       </main>
 

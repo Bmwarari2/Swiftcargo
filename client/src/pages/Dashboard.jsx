@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Package, Wallet, TrendingUp, Plus, Eye, DollarSign, Clock } from 'lucide-react'
+import { Package, Wallet, TrendingUp, Plus, Eye, Copy, CheckCheck } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { ordersApi, walletApi } from '../api'
@@ -11,6 +11,7 @@ export const Dashboard = () => {
   const { t } = useLanguage()
   const [loading, setLoading] = useState(true)
   const [orders, setOrders] = useState([])
+  const [copied, setCopied] = useState(false)
   const [stats, setStats] = useState({
     activeOrders: 0,
     walletBalance: 0,
@@ -21,7 +22,7 @@ export const Dashboard = () => {
     const fetchData = async () => {
       try {
         const [ordersRes, walletRes] = await Promise.all([
-          ordersApi.list({ status: ['pending', 'processing', 'in-transit'] }),
+          ordersApi.list({ status: ['pending', 'received_at_warehouse', 'in_transit'] }),
           walletApi.getBalance(),
         ])
 
@@ -41,16 +42,40 @@ export const Dashboard = () => {
     fetchData()
   }, [user])
 
+  // Build the full shipping address lines
+  const addressLines = [
+    user?.name || '',
+    user?.warehouse_id || user?.warehouseId || '',
+    '31 Collingwood Close',
+    'Hazel Grove, Stockport',
+    'SK7 4LB',
+    'United Kingdom',
+  ].filter(Boolean)
+
+  const handleCopyAddress = useCallback(() => {
+    navigator.clipboard.writeText(addressLines.join('\n')).then(() => {
+      setCopied(true)
+      toast.success('Address copied to clipboard')
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }, [addressLines])
+
   const getStatusColor = (status) => {
     const colors = {
       pending: 'status-pending',
-      processing: 'status-processing',
-      'in-transit': 'status-in-transit',
+      received_at_warehouse: 'status-processing',
+      consolidating: 'status-processing',
+      in_transit: 'status-in-transit',
+      customs: 'status-in-transit',
+      out_for_delivery: 'status-in-transit',
       delivered: 'status-delivered',
-      failed: 'status-failed',
       cancelled: 'status-cancelled',
     }
     return colors[status] || 'status-pending'
+  }
+
+  const formatStatus = (status) => {
+    return status?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Pending'
   }
 
   if (loading) {
@@ -77,16 +102,19 @@ export const Dashboard = () => {
         {/* Warehouse Address Card */}
         <div className="card mb-8 bg-gradient-to-r from-[#1e3a5f] to-[#152d4a] text-white">
           <h3 className="text-lg font-bold mb-4">{t('dashboard.warehouseAddress')}</h3>
-          <div className="bg-[#0f1e33] rounded-lg p-4 mb-4">
-            <p className="text-sm text-gray-300 mb-1">United Kingdom</p>
-            <p className="font-mono text-base">31 Collingwood Close</p>
-            <p className="font-mono text-base">Hazel Grove, Stockport, SK7 4LB, UK</p>
-            <p className="font-mono text-base mt-2">
-              Attn: <span className="text-orange-400">SC-{user?.code}</span>
-            </p>
+          <div className="bg-[#0f1e33] rounded-lg p-4 mb-4 font-mono text-sm leading-relaxed">
+            {addressLines.map((line, i) => (
+              <p key={i} className={i < 2 ? 'text-orange-400 font-semibold' : 'text-gray-200'}>
+                {line}
+              </p>
+            ))}
           </div>
-          <button className="bg-orange-500 hover:bg-orange-600 px-4 py-2 rounded-lg font-medium transition-colors">
-            {t('warehouse.copy')}
+          <button
+            onClick={handleCopyAddress}
+            className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 px-4 py-2 rounded-lg font-medium transition-colors"
+          >
+            {copied ? <CheckCheck size={16} /> : <Copy size={16} />}
+            {copied ? 'Copied!' : t('warehouse.copy')}
           </button>
         </div>
 
@@ -169,7 +197,7 @@ export const Dashboard = () => {
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
-                      {t('orders.orderNumber')}
+                      Tracking #
                     </th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
                       {t('orders.market')}
@@ -192,19 +220,19 @@ export const Dashboard = () => {
                   {orders.slice(0, 5).map((order) => (
                     <tr key={order.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-6 py-4 font-mono text-sm text-gray-900">
-                        #{order.id.slice(0, 8)}
+                        {order.tracking_number || `#${order.id.slice(0, 8)}`}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600">{order.market}</td>
                       <td className="px-6 py-4">
                         <span className={`status-badge ${getStatusColor(order.status)}`}>
-                          {t(`orders.${order.status}`)}
+                          {formatStatus(order.status)}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {new Date(order.createdAt).toLocaleDateString()}
+                        {new Date(order.created_at || order.createdAt).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 text-sm font-semibold text-gray-900">
-                        KES {order.totalCost?.toLocaleString() || 0}
+                        KES {(order.estimated_cost || order.totalCost || 0).toLocaleString()}
                       </td>
                       <td className="px-6 py-4">
                         <Link
