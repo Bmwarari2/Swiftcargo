@@ -1,117 +1,110 @@
-import React, { createContext, useState, useContext, useEffect } from 'react'
-import axios from 'axios'
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { authApi } from '../api'
+import { saveSession, getSession, clearSession } from '../api/client'
 
-const AuthContext = createContext()
+const AuthContext = createContext(null)
 
-export const AuthProvider = ({ children }) => {
+/**
+ * AuthProvider – wrap your <App /> with this in main.jsx / index.jsx:
+ *
+ *   <AuthProvider>
+ *     <App />
+ *   </AuthProvider>
+ */
+export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
-  const [token, setToken] = useState(localStorage.getItem('token'))
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(true)   // true while we check the stored token
 
+  // ── On mount: restore session from localStorage ──────────────────────────
   useEffect(() => {
-    const loadUser = async () => {
-      if (token) {
-        try {
-          const response = await axios.get('/api/auth/me', {
-            headers: { Authorization: `Bearer ${token}` },
-          })
-          setUser(response.data.user)
-        } catch (err) {
-          localStorage.removeItem('token')
-          setToken(null)
-        }
-      }
+    const { token, user: storedUser } = getSession()
+
+    if (token && storedUser) {
+      // Optimistically restore from cache, then verify with the server
+      setUser(storedUser)
+      authApi
+        .me()
+        .then((res) => {
+          const freshUser = res.data.user
+          setUser(freshUser)
+          saveSession(token, freshUser)
+        })
+        .catch(() => {
+          // Token is invalid / expired – clear everything
+          clearSession()
+          setUser(null)
+        })
+        .finally(() => setLoading(false))
+    } else {
       setLoading(false)
     }
+  }, [])
 
-    loadUser()
-  }, [token])
+  // ── login ─────────────────────────────────────────────────────────────────
+  const login = useCallback(async (email, password) => {
+    const res = await authApi.login(email, password)
+    const { token, user: loggedInUser } = res.data
+    saveSession(token, loggedInUser)
+    setUser(loggedInUser)
+    return loggedInUser
+  }, [])
 
-  const login = async (email, password) => {
-    try {
-      setError(null)
-      const response = await axios.post('/api/auth/login', {
-        email,
-        password,
-      })
-      const { token: newToken, user: userData } = response.data
-      localStorage.setItem('token', newToken)
-      setToken(newToken)
-      setUser(userData)
-      return userData
-    } catch (err) {
-      const message = err.response?.data?.message || 'Login failed'
-      setError(message)
-      throw new Error(message)
-    }
-  }
-
-  const register = async (name, email, phone, password, referralCode = null) => {
-    try {
-      setError(null)
-      const response = await axios.post('/api/auth/register', {
-        name,
-        email,
-        phone,
-        password,
-        referralCode,
-      })
-      const { token: newToken, user: userData } = response.data
-      localStorage.setItem('token', newToken)
-      setToken(newToken)
-      setUser(userData)
-      return userData
-    } catch (err) {
-      const message = err.response?.data?.message || 'Registration failed'
-      setError(message)
-      throw new Error(message)
-    }
-  }
-
-  const logout = () => {
-    localStorage.removeItem('token')
-    setToken(null)
-    setUser(null)
-  }
-
-  const updateProfile = async (updates) => {
-    try {
-      setError(null)
-      const response = await axios.put('/api/auth/profile', updates, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      setUser(response.data.user)
-      return response.data.user
-    } catch (err) {
-      const message = err.response?.data?.message || 'Update failed'
-      setError(message)
-      throw new Error(message)
-    }
-  }
-
-  return (
-    <AuthContext.Provider value={{
-      user,
-      token,
-      loading,
-      error,
-      login,
-      register,
-      logout,
-      updateProfile,
-      isAuthenticated: !!user,
-      isAdmin: user?.role === 'admin',
-    }}>
-      {children}
-    </AuthContext.Provider>
+  // ── register ──────────────────────────────────────────────────────────────
+  /**
+   * Called from Register.jsx as:
+   *   register(name, email, phone, password, referralCode)
+   */
+  const register = useCallback(
+    async (name, email, phone, password, referralCode = null) => {
+      const res = await authApi.register(name, email, phone, password, referralCode)
+      const { token, user: newUser } = res.data
+      saveSession(token, newUser)
+      setUser(newUser)
+      return newUser
+    },
+    []
   )
+
+  // ── logout ────────────────────────────────────────────────────────────────
+  const logout = useCallback(() => {
+    clearSession()
+    setUser(null)
+  }, [])
+
+  // ── updateProfile ─────────────────────────────────────────────────────────
+  const updateProfile = useCallback(async (data) => {
+    const res = await authApi.updateProfile(data)
+    const updatedUser = res.data.user
+    const { token } = getSession()
+    saveSession(token, updatedUser)
+    setUser(updatedUser)
+    return updatedUser
+  }, [])
+
+  const value = {
+    user,
+    loading,
+    login,
+    register,
+    logout,
+    updateProfile,
+    isAdmin: user?.role === 'admin',
+  }
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
-export const useAuth = () => {
-  const context = useContext(AuthContext)
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider')
+/**
+ * useAuth – consume auth state anywhere inside AuthProvider:
+ *
+ *   const { user, login, logout, isAdmin } = useAuth()
+ */
+export function useAuth() {
+  const ctx = useContext(AuthContext)
+  if (!ctx) {
+    throw new Error('useAuth must be used inside <AuthProvider>')
   }
-  return context
+  return ctx
 }
+
+export default AuthContext
