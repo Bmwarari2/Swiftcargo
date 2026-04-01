@@ -69,7 +69,7 @@ export const NewOrder = () => {
           ? { enabled: true, declaredValue: parseFloat(formData.declaredValue) || 0 }
           : { enabled: false }
       )
-      setEstimate(response.data)
+      setEstimate(response.data.pricing)
     } catch (err) {
       toast.error('Failed to calculate estimate')
     }
@@ -104,20 +104,19 @@ export const NewOrder = () => {
         market: formData.market,
         retailer: retailerName,
         description: formData.description,
-        weight: parseFloat(formData.weight),
+        weight_kg: parseFloat(formData.weight),
         dimensions: {
           length: parseFloat(formData.length) || 0,
           width: parseFloat(formData.width) || 0,
           height: parseFloat(formData.height) || 0,
         },
-        shippingSpeed: formData.shippingSpeed,
+        shipping_speed: formData.shippingSpeed,
         insurance: formData.insurance,
-        declaredValue: formData.insurance ? parseFloat(formData.declaredValue) || 0 : 0,
-        promoCode: formData.promoCode || null,
+        declared_value: formData.insurance ? parseFloat(formData.declaredValue) || 0 : 0,
       })
 
       toast.success(t('common.success'))
-      navigate(`/orders/${response.data.id}`)
+      navigate(`/orders/${response.data.order.id}`)
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to create order')
       toast.error(err.response?.data?.message || 'Failed to create order')
@@ -389,30 +388,28 @@ export const NewOrder = () => {
 
               <div className="space-y-3 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-700">Base Cost:</span>
-                  <span className="font-semibold">USD {estimate.baseCost?.toFixed(2)}</span>
+                  <span className="text-gray-700">Base Shipping:</span>
+                  <span className="font-semibold">KES {estimate.breakdown?.base_shipping?.amount?.toLocaleString()}</span>
                 </div>
-                {formData.shippingSpeed === 'express' && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-700">Express Fee:</span>
-                    <span className="font-semibold">USD {(estimate.baseCost * 0.3).toFixed(2)}</span>
-                  </div>
-                )}
-                {formData.insurance && (
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Handling Fee:</span>
+                  <span className="font-semibold">KES {estimate.breakdown?.handling_fee?.amount?.toLocaleString()}</span>
+                </div>
+                {estimate.breakdown?.insurance?.included && (
                   <div className="flex justify-between">
                     <span className="text-gray-700">Insurance:</span>
-                    <span className="font-semibold">USD {estimate.insuranceCost?.toFixed(2)}</span>
+                    <span className="font-semibold">KES {estimate.breakdown?.insurance?.amount?.toLocaleString()}</span>
                   </div>
                 )}
                 <div className="flex justify-between pb-3 border-b border-orange-300">
-                  <span className="text-gray-700">Customs Duty:</span>
-                  <span className="font-semibold">KES {estimate.customsDuty?.toLocaleString()}</span>
+                  <span className="text-gray-700">Customs Estimate:</span>
+                  <span className="font-semibold">KES {estimate.breakdown?.customs_estimate?.amount?.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between text-base">
                   <span className="text-[#1e3a5f] font-bold">Total:</span>
                   <div className="text-right">
-                    <p className="font-bold text-orange-600">USD {estimate.totalUSD?.toFixed(2)}</p>
-                    <p className="font-bold text-[#1e3a5f]">KES {estimate.totalKES?.toLocaleString()}</p>
+                    <p className="font-bold text-orange-600">KES {estimate.summary?.total?.toLocaleString()}</p>
+                    <p className="text-xs text-gray-500 mt-1">{estimate.notes?.delivery_time}</p>
                   </div>
                 </div>
               </div>
