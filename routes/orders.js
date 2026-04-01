@@ -11,10 +11,8 @@ function generateTrackingNumber() {
   return `SC-${date}-${random}`;
 }
 
-/**
- * GET /api/orders
- */
-router.get('/', authMiddleware, (req, res) => {
+/** GET /api/orders */
+router.get('/', authMiddleware, async (req, res) => {
   try {
     const db = req.db;
     const userId = req.user.id;
@@ -23,22 +21,25 @@ router.get('/', authMiddleware, (req, res) => {
     const status = req.query.status;
     const market = req.query.market;
 
-    let query = 'SELECT * FROM orders WHERE user_id = ?';
-    let countQuery = 'SELECT COUNT(*) as count FROM orders WHERE user_id = ?';
     const params = [userId];
+    let conditions = 'WHERE user_id = $1';
+    if (status) { params.push(status); conditions += ` AND status = $${params.length}`; }
+    if (market) { params.push(market); conditions += ` AND market = $${params.length}`; }
 
-    if (status) { query += ' AND status = ?'; countQuery += ' AND status = ?'; params.push(status); }
-    if (market) { query += ' AND market = ?'; countQuery += ' AND market = ?'; params.push(market); }
-
-    const total = db.prepare(countQuery).get(...params).count;
+    const countResult = await db.query(`SELECT COUNT(*) AS count FROM orders ${conditions}`, params);
+    const total = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(total / limit);
     const offset = (page - 1) * limit;
-    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-    const orders = db.prepare(query).all(...params, limit, offset);
+
+    params.push(limit, offset);
+    const orders = await db.query(
+      `SELECT * FROM orders ${conditions} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
 
     res.json({
       success: true,
-      orders: orders.map(o => ({ ...o, dimensions_json: o.dimensions_json ? JSON.parse(o.dimensions_json) : null })),
+      orders: orders.rows.map(o => ({ ...o, dimensions_json: o.dimensions_json ? JSON.parse(o.dimensions_json) : null })),
       pagination: { page, limit, total, totalPages }
     });
   } catch (error) {
@@ -47,118 +48,76 @@ router.get('/', authMiddleware, (req, res) => {
   }
 });
 
-/**
- * POST /api/orders
- * Creates an order and triggers the referral reward if this is the referee's first order.
- */
-router.post('/', authMiddleware, (req, res) => {
+/** POST /api/orders */
+router.post('/', authMiddleware, async (req, res) => {
   try {
     const db = req.db;
     const userId = req.user.id;
     const { retailer, market, description, weight_kg, dimensions, shipping_speed, insurance, declared_value } = req.body;
 
-    if (!retailer || !market || !description) {
+    if (!retailer || !market || !description)
       return res.status(400).json({ success: false, message: 'Missing required fields: retailer, market, description' });
-    }
-    if (!['UK', 'USA', 'China'].includes(market)) {
+    if (!['UK', 'USA', 'China'].includes(market))
       return res.status(400).json({ success: false, message: 'Invalid market. Must be UK, USA, or China' });
-    }
     const speed = shipping_speed || 'economy';
-    if (!['economy', 'express'].includes(speed)) {
+    if (!['economy', 'express'].includes(speed))
       return res.status(400).json({ success: false, message: 'Invalid shipping speed.' });
-    }
 
     const costBreakdown = calculateShippingCost({
-      weight_kg: weight_kg || 0,
-      dimensions,
-      market,
-      shipping_speed: speed,
-      insurance: insurance || false,
-      declared_value: declared_value || 0
+      weight_kg: weight_kg || 0, dimensions, market, shipping_speed: speed,
+      insurance: insurance || false, declared_value: declared_value || 0
     });
 
     const orderId = uuidv4();
     const trackingNumber = generateTrackingNumber();
 
-    // Wrap everything in a transaction so order + referral credit are atomic
-    const createOrderTx = db.transaction(() => {
-      db.prepare(`
-        INSERT INTO orders (
-          id, user_id, tracking_number, retailer, market, status,
-          description, weight_kg, dimensions_json, shipping_speed,
-          insurance, declared_value, estimated_cost
-        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        orderId, userId, trackingNumber, retailer, market,
-        description, weight_kg || null,
-        dimensions ? JSON.stringify(dimensions) : null,
-        speed, insurance ? 1 : 0, declared_value || 0,
-        costBreakdown.total
+    await db.query('BEGIN');
+    try {
+      await db.query(
+        `INSERT INTO orders (id, user_id, tracking_number, retailer, market, status, description,
+          weight_kg, dimensions_json, shipping_speed, insurance, declared_value, estimated_cost)
+         VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8,$9,$10,$11,$12)`,
+        [orderId, userId, trackingNumber, retailer, market, description,
+          weight_kg || null, dimensions ? JSON.stringify(dimensions) : null,
+          speed, insurance ? true : false, declared_value || 0, costBreakdown.total]
       );
 
-      db.prepare(`
-        INSERT INTO packages (id, order_id, user_id, description, weight_kg, status)
-        VALUES (?, ?, ?, ?, ?, 'pending')
-      `).run(uuidv4(), orderId, userId, description, weight_kg || null);
+      await db.query(
+        `INSERT INTO packages (id, order_id, user_id, description, weight_kg, status) VALUES ($1,$2,$3,$4,$5,'pending')`,
+        [uuidv4(), orderId, userId, description, weight_kg || null]
+      );
 
-      // ── Referral reward logic ──────────────────────────────────────────────
-      // Only fires when the referee places their very first order
-      const pendingReferral = db.prepare(`
-        SELECT id, referrer_id, reward_amount
-        FROM referrals
-        WHERE referee_id = ? AND status = 'pending'
-        LIMIT 1
-      `).get(userId);
-
+      const refResult = await db.query(
+        `SELECT id, referrer_id, reward_amount FROM referrals WHERE referee_id = $1 AND status = 'pending' LIMIT 1`,
+        [userId]
+      );
+      const pendingReferral = refResult.rows[0];
       if (pendingReferral) {
-        // Count includes the order just inserted above
-        const orderCount = db.prepare(
-          'SELECT COUNT(*) as cnt FROM orders WHERE user_id = ?'
-        ).get(userId).cnt;
-
-        if (orderCount === 1) {
+        const countRes = await db.query('SELECT COUNT(*) AS cnt FROM orders WHERE user_id = $1', [userId]);
+        if (parseInt(countRes.rows[0].cnt) === 1) {
           const reward = pendingReferral.reward_amount || 50;
-
-          // Mark referral completed
-          db.prepare(`
-            UPDATE referrals
-            SET status = 'completed', completed_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-          `).run(pendingReferral.id);
-
-          // Credit referrer's wallet_balance
-          db.prepare(
-            'UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?'
-          ).run(reward, pendingReferral.referrer_id);
-
-          // Sync wallet table
-          db.prepare(
-            'UPDATE wallet SET balance = balance + ?, last_updated = CURRENT_TIMESTAMP WHERE user_id = ?'
-          ).run(reward, pendingReferral.referrer_id);
-
-          // Record transaction — only columns that exist in the schema
-          db.prepare(`
-            INSERT INTO transactions (id, user_id, type, amount, currency, payment_method, status)
-            VALUES (?, ?, 'referral_credit', ?, 'KES', 'wallet', 'completed')
-          `).run(uuidv4(), pendingReferral.referrer_id, reward);
+          await db.query(`UPDATE referrals SET status = 'completed', completed_at = NOW() WHERE id = $1`, [pendingReferral.id]);
+          await db.query('UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id = $2', [reward, pendingReferral.referrer_id]);
+          await db.query('UPDATE wallet SET balance = balance + $1, last_updated = NOW() WHERE user_id = $2', [reward, pendingReferral.referrer_id]);
+          await db.query(
+            `INSERT INTO transactions (id, user_id, type, amount, currency, payment_method, status)
+             VALUES ($1,$2,'referral_reward',$3,'KES','system','completed')`,
+            [uuidv4(), pendingReferral.referrer_id, reward]
+          );
         }
       }
-      // ── End referral logic ─────────────────────────────────────────────────
-    });
 
-    createOrderTx();
+      await db.query('COMMIT');
+    } catch (e) {
+      await db.query('ROLLBACK');
+      throw e;
+    }
 
+    const newOrder = await db.query('SELECT * FROM orders WHERE id = $1', [orderId]);
     res.status(201).json({
       success: true,
       message: 'Order created successfully',
-      order: {
-        id: orderId,
-        tracking_number: trackingNumber,
-        retailer, market, description, weight_kg, dimensions,
-        shipping_speed: speed, insurance, declared_value,
-        status: 'pending',
-        cost_breakdown: costBreakdown
-      }
+      order: { ...newOrder.rows[0], dimensions_json: newOrder.rows[0].dimensions_json ? JSON.parse(newOrder.rows[0].dimensions_json) : null, cost_breakdown: costBreakdown }
     });
   } catch (error) {
     console.error('Create order error:', error);
@@ -166,20 +125,26 @@ router.post('/', authMiddleware, (req, res) => {
   }
 });
 
-/**
- * GET /api/orders/:id
- */
-router.get('/:id', authMiddleware, (req, res) => {
+/** GET /api/orders/:id */
+router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const db = req.db;
-    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    const { id } = req.params;
+    const userId = req.user.id;
+    const isAdminUser = req.user.role === 'admin';
+
+    const result = isAdminUser
+      ? await db.query('SELECT * FROM orders WHERE id = $1', [id])
+      : await db.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2', [id, userId]);
+
+    const order = result.rows[0];
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
 
-    const packages = db.prepare('SELECT * FROM packages WHERE order_id = ?').all(req.params.id);
+    const pkgs = await db.query('SELECT * FROM packages WHERE order_id = $1', [id]);
+
     res.json({
       success: true,
-      order: { ...order, dimensions_json: order.dimensions_json ? JSON.parse(order.dimensions_json) : null },
-      packages
+      order: { ...order, dimensions_json: order.dimensions_json ? JSON.parse(order.dimensions_json) : null, packages: pkgs.rows }
     });
   } catch (error) {
     console.error('Get order error:', error);
@@ -187,43 +152,30 @@ router.get('/:id', authMiddleware, (req, res) => {
   }
 });
 
-/**
- * PUT /api/orders/:id  (admin only)
- */
-router.put('/:id', authMiddleware, isAdmin, (req, res) => {
+/** PUT /api/orders/:id/status */
+router.put('/:id/status', authMiddleware, isAdmin, async (req, res) => {
   try {
     const db = req.db;
     const { id } = req.params;
     const { status, actual_cost, customs_duty } = req.body;
 
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
-    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+    if (!status) return res.status(400).json({ success: false, message: 'Status is required' });
 
     const validStatuses = ['pending','received_at_warehouse','consolidating','in_transit','customs','out_for_delivery','delivered','cancelled'];
+    if (!validStatuses.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
 
-    const updates = [];
-    const params = [];
-    if (status) {
-      if (!validStatuses.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
-      updates.push('status = ?'); params.push(status);
-    }
-    if (actual_cost !== undefined) { updates.push('actual_cost = ?'); params.push(actual_cost); }
-    if (customs_duty !== undefined) { updates.push('customs_duty = ?'); params.push(customs_duty); }
-    if (!updates.length) return res.status(400).json({ success: false, message: 'Provide at least one field to update' });
-
-    updates.push('updated_at = CURRENT_TIMESTAMP');
+    const params = [status];
+    let setClauses = ['status = $1', 'updated_at = NOW()'];
+    if (actual_cost !== undefined) { params.push(actual_cost); setClauses.push(`actual_cost = $${params.length}`); }
+    if (customs_duty !== undefined) { params.push(customs_duty); setClauses.push(`customs_duty = $${params.length}`); }
     params.push(id);
-    db.prepare(`UPDATE orders SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+    await db.query(`UPDATE orders SET ${setClauses.join(', ')} WHERE id = $${params.length}`, params);
 
-    const updated = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
-    res.json({
-      success: true,
-      message: 'Order updated successfully',
-      order: { ...updated, dimensions_json: updated.dimensions_json ? JSON.parse(updated.dimensions_json) : null }
-    });
+    const updated = await db.query('SELECT * FROM orders WHERE id = $1', [id]);
+    res.json({ success: true, message: 'Order status updated', order: updated.rows[0] });
   } catch (error) {
-    console.error('Update order error:', error);
-    res.status(500).json({ success: false, message: 'Failed to update order' });
+    console.error('Update order status error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update order status' });
   }
 });
 

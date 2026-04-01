@@ -4,58 +4,36 @@ import { sendInAppNotification } from '../utils/notifications.js';
 
 const router = express.Router();
 
-/**
- * GET /api/tracking/:trackingNumber
- * Public tracking endpoint (no authentication required)
- */
-router.get('/:trackingNumber', optionalAuth, (req, res) => {
+/** GET /api/tracking/:trackingNumber */
+router.get('/:trackingNumber', optionalAuth, async (req, res) => {
   try {
     const db = req.db;
     const { trackingNumber } = req.params;
 
-    const order = db.prepare(`
-      SELECT
-        id, user_id, tracking_number, retailer, market, status,
-        description, weight_kg, dimensions_json, shipping_speed,
-        insurance, declared_value, estimated_cost, actual_cost,
-        customs_duty, created_at, updated_at
-      FROM orders WHERE tracking_number = ?
-    `).get(trackingNumber);
+    const result = await db.query(
+      `SELECT id, user_id, tracking_number, retailer, market, status, description,
+              weight_kg, dimensions_json, shipping_speed, insurance, declared_value,
+              estimated_cost, actual_cost, customs_duty, created_at, updated_at
+       FROM orders WHERE tracking_number = $1`,
+      [trackingNumber]
+    );
+    const order = result.rows[0];
+    if (!order) return res.status(404).json({ success: false, message: 'Tracking number not found' });
 
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tracking number not found'
-      });
-    }
-
-    // Get associated packages
-    const packages = db.prepare(`
-      SELECT * FROM packages WHERE order_id = ?
-    `).all(order.id);
+    const pkgs = await db.query('SELECT * FROM packages WHERE order_id = $1', [order.id]);
 
     res.json({
       success: true,
-      tracking: {
-        ...order,
-        dimensions_json: order.dimensions_json ? JSON.parse(order.dimensions_json) : null,
-        packages
-      }
+      tracking: { ...order, dimensions_json: order.dimensions_json ? JSON.parse(order.dimensions_json) : null, packages: pkgs.rows }
     });
   } catch (error) {
     console.error('Tracking error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch tracking information'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch tracking information' });
   }
 });
 
-/**
- * GET /api/tracking/user/packages
- * Get all user's packages with current status
- */
-router.get('/user/packages', authMiddleware, (req, res) => {
+/** GET /api/tracking/user/packages */
+router.get('/user/packages', authMiddleware, async (req, res) => {
   try {
     const db = req.db;
     const userId = req.user.id;
@@ -63,122 +41,59 @@ router.get('/user/packages', authMiddleware, (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const status = req.query.status;
 
-    let query = `
-      SELECT p.*, o.tracking_number, o.retailer, o.market
-      FROM packages p
-      JOIN orders o ON p.order_id = o.id
-      WHERE p.user_id = ?
-    `;
-
-    let countQuery = 'SELECT COUNT(*) as count FROM packages WHERE user_id = ?';
     const params = [userId];
+    let conditions = 'WHERE p.user_id = $1';
+    if (status) { params.push(status); conditions += ` AND p.status = $${params.length}`; }
 
-    if (status) {
-      query += ' AND p.status = ?';
-      countQuery += ' AND status = ?';
-      params.push(status);
-    }
-
-    // Get total count
-    const countResult = db.prepare(countQuery).get(...params);
-    const total = countResult.count;
+    const countRes = await db.query(`SELECT COUNT(*) AS count FROM packages p ${conditions}`, params);
+    const total = parseInt(countRes.rows[0].count);
     const totalPages = Math.ceil(total / limit);
-
-    // Get paginated results
     const offset = (page - 1) * limit;
-    query += ' ORDER BY p.created_at DESC LIMIT ? OFFSET ?';
-    const packages = db.prepare(query).all(...params, limit, offset);
+    params.push(limit, offset);
 
-    res.json({
-      success: true,
-      packages,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages
-      }
-    });
+    const packages = await db.query(
+      `SELECT p.*, o.tracking_number, o.retailer, o.market
+       FROM packages p JOIN orders o ON p.order_id = o.id
+       ${conditions} ORDER BY p.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    res.json({ success: true, packages: packages.rows, pagination: { page, limit, total, totalPages } });
   } catch (error) {
     console.error('Get packages error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch packages'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch packages' });
   }
 });
 
-/**
- * PUT /api/tracking/:id/status
- * Update package status (admin only)
- */
-router.put('/:id/status', authMiddleware, isAdmin, (req, res) => {
+/** PUT /api/tracking/:id/status */
+router.put('/:id/status', authMiddleware, isAdmin, async (req, res) => {
   try {
     const db = req.db;
     const { id } = req.params;
     const { status, warehouse_location } = req.body;
 
-    if (!status) {
-      return res.status(400).json({
-        success: false,
-        message: 'Status is required'
-      });
-    }
+    if (!status) return res.status(400).json({ success: false, message: 'Status is required' });
+    const validStatuses = ['pending','received','consolidating','in_transit','customs','out_for_delivery','delivered','lost'];
+    if (!validStatuses.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
 
-    const validStatuses = ['pending', 'received', 'consolidating', 'in_transit', 'customs', 'out_for_delivery', 'delivered', 'lost'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid status'
-      });
-    }
+    const pkgRes = await db.query('SELECT * FROM packages WHERE id = $1', [id]);
+    if (!pkgRes.rows[0]) return res.status(404).json({ success: false, message: 'Package not found' });
 
-    // Get package details
-    const pkg = db.prepare('SELECT * FROM packages WHERE id = ?').get(id);
-    if (!pkg) {
-      return res.status(404).json({
-        success: false,
-        message: 'Package not found'
-      });
-    }
-
-    // Update package
-    const updates = ['status = ?', 'updated_at = CURRENT_TIMESTAMP'];
     const params = [status];
-
-    if (warehouse_location) {
-      updates.push('warehouse_location = ?');
-      params.push(warehouse_location);
-    }
-
-    if (status === 'received') {
-      updates.push('received_at = CURRENT_TIMESTAMP');
-    }
-
+    const setClauses = ['status = $1', 'updated_at = NOW()'];
+    if (warehouse_location) { params.push(warehouse_location); setClauses.push(`warehouse_location = $${params.length}`); }
+    if (status === 'received') setClauses.push('received_at = NOW()');
     params.push(id);
+    await db.query(`UPDATE packages SET ${setClauses.join(', ')} WHERE id = $${params.length}`, params);
 
-    const query = `UPDATE packages SET ${updates.join(', ')} WHERE id = ?`;
-    db.prepare(query).run(...params);
+    const orderRes = await db.query('SELECT * FROM orders WHERE id = $1', [pkgRes.rows[0].order_id]);
+    sendInAppNotification(pkgRes.rows[0].user_id, `Package status updated to ${status}. Tracking: ${orderRes.rows[0].tracking_number}`);
 
-    // Get order details for notification
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(pkg.order_id);
-
-    // Send notification to customer
-    sendInAppNotification(pkg.user_id, `Package status updated to ${status}. Tracking: ${order.tracking_number}`);
-
-    const updatedPackage = db.prepare('SELECT * FROM packages WHERE id = ?').get(id);
-
-    res.json({
-      success: true,
-      message: 'Package status updated successfully',
-      package: updatedPackage
-    });
+    const updated = await db.query('SELECT * FROM packages WHERE id = $1', [id]);
+    res.json({ success: true, message: 'Package status updated successfully', package: updated.rows[0] });
   } catch (error) {
     console.error('Update package status error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update package status'
-    });
+    res.status(500).json({ success: false, message: 'Failed to update package status' });
   }
 });
 

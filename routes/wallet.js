@@ -4,264 +4,115 @@ import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
 
-/**
- * GET /api/wallet
- * Get user's wallet balance and recent transactions
- */
-router.get('/', authMiddleware, (req, res) => {
+/** GET /api/wallet */
+router.get('/', authMiddleware, async (req, res) => {
   try {
     const db = req.db;
     const userId = req.user.id;
 
-    // Get wallet
-    const wallet = db.prepare(`
-      SELECT id, user_id, balance, currency, last_updated
-      FROM wallet WHERE user_id = ?
-    `).get(userId);
+    const walletResult = await db.query(
+      'SELECT id, user_id, balance, currency, last_updated FROM wallet WHERE user_id = $1',
+      [userId]
+    );
+    if (!walletResult.rows[0])
+      return res.status(404).json({ success: false, message: 'Wallet not found' });
 
-    if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: 'Wallet not found'
-      });
-    }
+    const txResult = await db.query(
+      `SELECT id, type, amount, currency, payment_method, status, created_at
+       FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5`,
+      [userId]
+    );
 
-    // Get recent transactions
-    const transactions = db.prepare(`
-      SELECT id, type, amount, currency, payment_method, status, created_at
-      FROM transactions WHERE user_id = ?
-      ORDER BY created_at DESC LIMIT 5
-    `).all(userId);
-
-    res.json({
-      success: true,
-      wallet,
-      recent_transactions: transactions
-    });
+    res.json({ success: true, wallet: walletResult.rows[0], recent_transactions: txResult.rows });
   } catch (error) {
     console.error('Get wallet error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch wallet'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch wallet' });
   }
 });
 
-/**
- * POST /api/wallet/deposit
- * Deposit funds (with payment method placeholders)
- */
-router.post('/deposit', authMiddleware, (req, res) => {
+/** POST /api/wallet/deposit */
+router.post('/deposit', authMiddleware, async (req, res) => {
   try {
     const db = req.db;
     const userId = req.user.id;
     const { amount, payment_method, payment_details } = req.body;
 
-    // Validation
-    if (!amount || amount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid amount'
-      });
-    }
-
-    if (!payment_method) {
-      return res.status(400).json({
-        success: false,
-        message: 'Payment method is required'
-      });
-    }
-
-    if (!['mpesa', 'stripe', 'paypal'].includes(payment_method)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid payment method. Must be mpesa, stripe, or paypal'
-      });
-    }
+    if (!amount || amount <= 0)
+      return res.status(400).json({ success: false, message: 'Invalid amount' });
+    if (!payment_method)
+      return res.status(400).json({ success: false, message: 'Payment method is required' });
+    if (!['mpesa', 'stripe', 'paypal'].includes(payment_method))
+      return res.status(400).json({ success: false, message: 'Invalid payment method. Must be mpesa, stripe, or paypal' });
 
     const transactionId = uuidv4();
-    let paymentReference = `${payment_method.toUpperCase()}-${transactionId.slice(0, 8)}`;
-    let status = 'pending';
+    const paymentReference = `${payment_method.toUpperCase()}-${transactionId.slice(0, 8)}`;
 
-    // Create transaction (placeholder for actual payment processing)
-    const insertTransaction = db.prepare(`
-      INSERT INTO transactions (
-        id, user_id, type, amount, currency, payment_method,
-        payment_reference, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    insertTransaction.run(
-      transactionId,
-      userId,
-      'deposit',
-      amount,
-      'KES',
-      payment_method,
-      paymentReference,
-      status
+    await db.query(
+      `INSERT INTO transactions (id, user_id, type, amount, currency, payment_method, payment_reference, status)
+       VALUES ($1,$2,'deposit',$3,'KES',$4,$5,'pending')`,
+      [transactionId, userId, amount, payment_method, paymentReference]
     );
 
-    // Process based on payment method
-    let processingResult = {
-      success: false,
-      message: 'Payment processing placeholder',
-      requiresAction: false
-    };
-
+    let processingResult = { success: false, message: 'Payment processing placeholder', requiresAction: false };
     if (payment_method === 'mpesa') {
-      // M-Pesa STK Push placeholder
-      processingResult = {
-        success: true,
-        message: 'M-Pesa STK push initiated',
-        requiresAction: true,
-        details: {
-          method: 'MPESA_STK_PUSH',
-          phone: payment_details?.phone || '',
-          amount: amount,
-          instruction: 'Check your phone for M-Pesa prompt'
-        }
-      };
+      processingResult = { success: true, message: 'M-Pesa STK push initiated', requiresAction: true,
+        details: { method: 'MPESA_STK_PUSH', phone: payment_details?.phone || '', amount, instruction: 'Check your phone for M-Pesa prompt' } };
     } else if (payment_method === 'stripe') {
-      // Stripe placeholder
-      processingResult = {
-        success: true,
-        message: 'Stripe payment processing',
-        requiresAction: true,
-        details: {
-          method: 'STRIPE_CHECKOUT',
-          sessionId: `cs_test_${transactionId.slice(0, 12)}`,
-          redirectUrl: '/stripe-checkout',
-          instruction: 'You will be redirected to Stripe checkout'
-        }
-      };
+      processingResult = { success: true, message: 'Stripe payment processing', requiresAction: true,
+        details: { method: 'STRIPE_CHECKOUT', sessionId: `cs_test_${transactionId.slice(0, 12)}`, redirectUrl: '/stripe-checkout', instruction: 'You will be redirected to Stripe checkout' } };
     } else if (payment_method === 'paypal') {
-      // PayPal placeholder
-      processingResult = {
-        success: true,
-        message: 'PayPal payment processing',
-        requiresAction: true,
-        details: {
-          method: 'PAYPAL_REDIRECT',
-          redirectUrl: '/paypal-checkout',
-          instruction: 'You will be redirected to PayPal'
-        }
-      };
+      processingResult = { success: true, message: 'PayPal payment processing', requiresAction: true,
+        details: { method: 'PAYPAL_REDIRECT', redirectUrl: '/paypal-checkout', instruction: 'You will be redirected to PayPal' } };
     }
 
-    res.status(202).json({
-      success: true,
-      message: 'Deposit initiated',
-      transaction_id: transactionId,
-      processing: processingResult
-    });
+    res.status(202).json({ success: true, message: 'Deposit initiated', transaction_id: transactionId, processing: processingResult });
   } catch (error) {
     console.error('Deposit error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Deposit failed'
-    });
+    res.status(500).json({ success: false, message: 'Deposit failed' });
   }
 });
 
-/**
- * POST /api/wallet/pay
- * Pay for an order from wallet
- */
-router.post('/pay', authMiddleware, (req, res) => {
+/** POST /api/wallet/pay */
+router.post('/pay', authMiddleware, async (req, res) => {
   try {
     const db = req.db;
     const userId = req.user.id;
     const { order_id, amount } = req.body;
 
-    // Validation
-    if (!order_id || !amount || amount <= 0) {
+    if (!order_id || !amount || amount <= 0)
+      return res.status(400).json({ success: false, message: 'order_id and amount are required' });
+
+    const orderRes = await db.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2', [order_id, userId]);
+    if (!orderRes.rows[0]) return res.status(404).json({ success: false, message: 'Order not found' });
+
+    const walletRes = await db.query('SELECT balance FROM wallet WHERE user_id = $1', [userId]);
+    if (!walletRes.rows[0]) return res.status(404).json({ success: false, message: 'Wallet not found' });
+
+    if (parseFloat(walletRes.rows[0].balance) < amount)
       return res.status(400).json({
-        success: false,
-        message: 'order_id and amount are required'
+        success: false, message: 'Insufficient wallet balance',
+        current_balance: walletRes.rows[0].balance, required_amount: amount,
+        shortfall: amount - walletRes.rows[0].balance
       });
-    }
 
-    // Get order
-    const order = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(order_id, userId);
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found'
-      });
-    }
-
-    // Get wallet
-    const wallet = db.prepare('SELECT balance FROM wallet WHERE user_id = ?').get(userId);
-    if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: 'Wallet not found'
-      });
-    }
-
-    // Check balance
-    if (wallet.balance < amount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Insufficient wallet balance',
-        current_balance: wallet.balance,
-        required_amount: amount,
-        shortfall: amount - wallet.balance
-      });
-    }
-
-    // Deduct from wallet and create transaction
     const transactionId = uuidv4();
-
-    // Update wallet balance
-    db.prepare('UPDATE wallet SET balance = balance - ?, last_updated = CURRENT_TIMESTAMP WHERE user_id = ?').run(
-      amount,
-      userId
+    await db.query('UPDATE wallet SET balance = balance - $1, last_updated = NOW() WHERE user_id = $2', [amount, userId]);
+    await db.query(
+      `INSERT INTO transactions (id, user_id, type, amount, currency, payment_method, status)
+       VALUES ($1,$2,'payment',$3,'KES','wallet','completed')`,
+      [transactionId, userId, amount]
     );
 
-    // Create transaction
-    const insertTransaction = db.prepare(`
-      INSERT INTO transactions (
-        id, user_id, type, amount, currency, payment_method, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    insertTransaction.run(
-      transactionId,
-      userId,
-      'payment',
-      amount,
-      'KES',
-      'wallet',
-      'completed'
-    );
-
-    // Get updated wallet
-    const updatedWallet = db.prepare('SELECT balance FROM wallet WHERE user_id = ?').get(userId);
-
-    res.json({
-      success: true,
-      message: 'Payment completed from wallet',
-      transaction_id: transactionId,
-      amount_paid: amount,
-      order_id: order_id,
-      new_balance: updatedWallet.balance
-    });
+    const updatedWallet = await db.query('SELECT balance FROM wallet WHERE user_id = $1', [userId]);
+    res.json({ success: true, message: 'Payment completed from wallet', transaction_id: transactionId, amount_paid: amount, order_id, new_balance: updatedWallet.rows[0].balance });
   } catch (error) {
     console.error('Pay from wallet error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Payment failed'
-    });
+    res.status(500).json({ success: false, message: 'Payment failed' });
   }
 });
 
-/**
- * GET /api/wallet/transactions
- * Transaction history with pagination
- */
-router.get('/transactions', authMiddleware, (req, res) => {
+/** GET /api/wallet/transactions */
+router.get('/transactions', authMiddleware, async (req, res) => {
   try {
     const db = req.db;
     const userId = req.user.id;
@@ -270,48 +121,26 @@ router.get('/transactions', authMiddleware, (req, res) => {
     const type = req.query.type;
     const status = req.query.status;
 
-    let query = 'SELECT * FROM transactions WHERE user_id = ?';
-    let countQuery = 'SELECT COUNT(*) as count FROM transactions WHERE user_id = ?';
     const params = [userId];
+    let conditions = 'WHERE user_id = $1';
+    if (type) { params.push(type); conditions += ` AND type = $${params.length}`; }
+    if (status) { params.push(status); conditions += ` AND status = $${params.length}`; }
 
-    if (type) {
-      query += ' AND type = ?';
-      countQuery += ' AND type = ?';
-      params.push(type);
-    }
-
-    if (status) {
-      query += ' AND status = ?';
-      countQuery += ' AND status = ?';
-      params.push(status);
-    }
-
-    // Get total count
-    const countResult = db.prepare(countQuery).get(...params);
-    const total = countResult.count;
+    const countRes = await db.query(`SELECT COUNT(*) AS count FROM transactions ${conditions}`, params);
+    const total = parseInt(countRes.rows[0].count);
     const totalPages = Math.ceil(total / limit);
-
-    // Get paginated results
     const offset = (page - 1) * limit;
-    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-    const transactions = db.prepare(query).all(...params, limit, offset);
+    params.push(limit, offset);
 
-    res.json({
-      success: true,
-      transactions,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages
-      }
-    });
+    const txResult = await db.query(
+      `SELECT * FROM transactions ${conditions} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    res.json({ success: true, transactions: txResult.rows, pagination: { page, limit, total, totalPages } });
   } catch (error) {
     console.error('Get transactions error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch transactions'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch transactions' });
   }
 });
 
