@@ -33,17 +33,17 @@ export const WarehouseAddresses = () => {
 
   const defaultAddresses = {
     UK: {
-      full: `31 Collingwood Close, Hazel Grove, Stockport, SK7 4LB, United Kingdom\nAttn: SC-${user?.code || 'XXXX'}`,
+      full: `31 Collingwood Close, Hazel Grove, Stockport, SK7 4LB, United Kingdom\nAttn: SC-${user?.warehouse_id || 'XXXX'}`,
       label: 'United Kingdom',
       flag: '🇬🇧',
     },
     USA: {
-      full: `SwiftCargo Warehouse, 1234 Commerce Way, Los Angeles, CA 90001, USA\nAttn: SC-${user?.code || 'XXXX'}`,
+      full: `SwiftCargo Warehouse, 1234 Commerce Way, Los Angeles, CA 90001, USA\nAttn: SC-${user?.warehouse_id || 'XXXX'}`,
       label: 'United States',
       flag: '🇺🇸',
     },
     China: {
-      full: `SwiftCargo Warehouse, Shanghai, China\nAttn: SC-${user?.code || 'XXXX'}`,
+      full: `SwiftCargo Warehouse, Shanghai, China\nAttn: SC-${user?.warehouse_id || 'XXXX'}`,
       label: 'China',
       flag: '🇨🇳',
     },
@@ -101,7 +101,7 @@ export const WarehouseAddresses = () => {
                   Copy Address
                 </button>
                 <button
-                  onClick={() => handleCopyAddress(`SC-${user?.code || 'XXXX'}`)}
+                  onClick={() => handleCopyAddress(`SC-${user?.warehouse_id || 'XXXX'}`)}
                   className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors"
                 >
                   <Copy size={20} />
