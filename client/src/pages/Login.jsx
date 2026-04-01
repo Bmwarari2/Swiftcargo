@@ -95,16 +95,16 @@ export const Login = () => {
                   name="password"
                   value={formData.password}
                   onChange={handleChange}
-                  placeholder="••••••••"
+                  placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
                   className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
                 />
               </div>
             </div>
 
             <div className="text-right">
-              <a href="#" className="text-sm text-orange-500 hover:text-orange-600">
+              <Link to="/forgot-password" className="text-sm text-orange-500 hover:text-orange-600">
                 {t('auth.forgotPassword')}
-              </a>
+              </Link>
             </div>
 
             <button
