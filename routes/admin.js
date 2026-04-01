@@ -1,6 +1,10 @@
 import express from 'express';
+import crypto from 'crypto';
 import { authMiddleware, isAdmin } from '../middleware/auth.js';
 import { v4 as uuidv4 } from 'uuid';
+import { sendAdminPasswordResetEmail, sendPaymentRequestEmail } from '../utils/email.js';
+import { calculateShippingCost } from '../utils/pricing.js';
+import { sendInAppNotification } from '../utils/notifications.js';
 
 const router = express.Router();
 
@@ -58,6 +62,45 @@ router.get('/users', authMiddleware, isAdmin, (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch users'
+    });
+  }
+});
+
+/**
+ * GET /api/admin/users/search
+ * Search customers by email or name (for admin order creation)
+ * NOTE: Must be registered BEFORE /users/:id to avoid route conflicts
+ */
+router.get('/users/search', authMiddleware, isAdmin, (req, res) => {
+  try {
+    const db = req.db;
+    const { q } = req.query;
+
+    if (!q || q.length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Search query must be at least 2 characters'
+      });
+    }
+
+    const searchTerm = `%${q}%`;
+    const customers = db.prepare(`
+      SELECT id, email, name, phone, warehouse_id
+      FROM users
+      WHERE role = 'customer' AND is_active = 1
+        AND (email LIKE ? OR name LIKE ?)
+      LIMIT 10
+    `).all(searchTerm, searchTerm);
+
+    res.json({
+      success: true,
+      customers
+    });
+  } catch (error) {
+    console.error('Search customers error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to search customers'
     });
   }
 });
@@ -285,7 +328,7 @@ router.put('/orders/bulk-update', authMiddleware, isAdmin, (req, res) => {
       });
     }
 
-    const validStatuses = ['pending', 'received_at_warehouse', 'consolidating', 'in_transit', 'customs', 'out_for_delivery', 'delivered'];
+    const validStatuses = ['pending', 'received_at_warehouse', 'consolidating', 'in_transit', 'customs', 'out_for_delivery', 'delivered', 'cancelled'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
@@ -593,6 +636,66 @@ router.get('/logs', authMiddleware, isAdmin, (req, res) => {
 });
 
 /**
+ * POST /api/admin/users/:id/reset-password
+ * Admin triggers a password-reset email for a user
+ */
+router.post('/users/:id/reset-password', authMiddleware, isAdmin, (req, res) => {
+  try {
+    const db = req.db;
+    const { id } = req.params;
+    const adminId = req.user.id;
+
+    const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Invalidate any existing unused tokens for this user
+    db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE user_id = ? AND used = 0').run(user.id);
+
+    // Generate a secure token
+    const token = crypto.randomBytes(32).toString('hex');
+    const tokenId = uuidv4();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+
+    db.prepare(`
+      INSERT INTO password_reset_tokens (id, user_id, token, expires_at)
+      VALUES (?, ?, ?, ?)
+    `).run(tokenId, user.id, token, expiresAt);
+
+    // Build reset link
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const resetLink = `${frontendUrl}/reset-password?token=${token}`;
+
+    // Send email
+    sendAdminPasswordResetEmail(user.email, user.name, resetLink).catch((err) => {
+      console.error('Failed to send admin password reset email:', err);
+    });
+
+    // Log the admin action
+    const logId = uuidv4();
+    db.prepare(`
+      INSERT INTO admin_logs (id, admin_id, action, details)
+      VALUES (?, ?, ?, ?)
+    `).run(logId, adminId, 'admin_reset_user_password', JSON.stringify({ user_id: id, user_email: user.email }));
+
+    res.json({
+      success: true,
+      message: `Password reset email sent to ${user.email}`
+    });
+  } catch (error) {
+    console.error('Admin reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send password reset email'
+    });
+  }
+});
+
+/**
  * GET /api/admin/exchange-rates
  * Get current admin-set exchange rates
  */
@@ -690,6 +793,393 @@ router.put('/exchange-rates', authMiddleware, isAdmin, (req, res) => {
     res.status(400).json({
       success: false,
       message: error.message || 'Failed to update exchange rates'
+    });
+  }
+});
+
+/**
+ * POST /api/admin/orders/create-for-client
+ * Create an order on behalf of a client (admin only)
+ * NOTE: Must be registered BEFORE /orders/:id routes to avoid route conflicts
+ */
+router.post('/orders/create-for-client', authMiddleware, isAdmin, (req, res) => {
+  try {
+    const db = req.db;
+    const adminId = req.user.id;
+    const {
+      customer_email,
+      customer_name,
+      retailer,
+      market,
+      description,
+      weight_kg,
+      dimensions,
+      shipping_speed,
+      insurance,
+      declared_value
+    } = req.body;
+
+    // Find the customer by email or name
+    if (!customer_email && !customer_name) {
+      return res.status(400).json({
+        success: false,
+        message: 'customer_email or customer_name is required to identify the client'
+      });
+    }
+
+    let customer;
+    if (customer_email) {
+      customer = db.prepare('SELECT id, email, name FROM users WHERE email = ? AND role = ?').get(customer_email, 'customer');
+    }
+    if (!customer && customer_name) {
+      customer = db.prepare('SELECT id, email, name FROM users WHERE name LIKE ? AND role = ?').get(`%${customer_name}%`, 'customer');
+    }
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found. Please check the email or name.'
+      });
+    }
+
+    // Validation
+    if (!retailer || !market || !description) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: retailer, market, description'
+      });
+    }
+
+    if (!['UK', 'USA', 'China'].includes(market)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid market. Must be UK, USA, or China'
+      });
+    }
+
+    const speed = shipping_speed || 'economy';
+    if (!['economy', 'express'].includes(speed)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid shipping speed'
+      });
+    }
+
+    // Calculate cost
+    const costBreakdown = calculateShippingCost({
+      weight_kg: weight_kg || 0,
+      dimensions: dimensions,
+      market,
+      shipping_speed: speed,
+      insurance: insurance || false,
+      declared_value: declared_value || 0
+    });
+
+    const orderId = uuidv4();
+    const date = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const random = Math.random().toString(36).substr(2, 4).toUpperCase();
+    const trackingNumber = `SC-${date}-${random}`;
+
+    const createOrder = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO orders (
+          id, user_id, tracking_number, retailer, market, status,
+          description, weight_kg, dimensions_json, shipping_speed,
+          insurance, declared_value, estimated_cost
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        orderId,
+        customer.id,
+        trackingNumber,
+        retailer,
+        market,
+        'pending',
+        description,
+        weight_kg || null,
+        dimensions ? JSON.stringify(dimensions) : null,
+        speed,
+        insurance ? 1 : 0,
+        declared_value || 0,
+        costBreakdown.total
+      );
+
+      // Create package entry
+      const packageId = uuidv4();
+      db.prepare(`
+        INSERT INTO packages (
+          id, order_id, user_id, description, weight_kg, status
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(packageId, orderId, customer.id, description, weight_kg || null, 'pending');
+
+      // Log the admin action
+      const logId = uuidv4();
+      db.prepare(`
+        INSERT INTO admin_logs (id, admin_id, action, details)
+        VALUES (?, ?, ?, ?)
+      `).run(logId, adminId, 'create_order_for_client', JSON.stringify({
+        order_id: orderId,
+        tracking_number: trackingNumber,
+        customer_id: customer.id,
+        customer_email: customer.email
+      }));
+    });
+
+    createOrder();
+
+    // Notify the customer
+    sendInAppNotification(
+      customer.id,
+      `A new order (${trackingNumber}) has been created for you by SwiftCargo.`
+    );
+
+    res.status(201).json({
+      success: true,
+      message: `Order created for ${customer.name} (${customer.email})`,
+      order: {
+        id: orderId,
+        tracking_number: trackingNumber,
+        customer: { id: customer.id, name: customer.name, email: customer.email },
+        retailer,
+        market,
+        description,
+        weight_kg,
+        dimensions,
+        shipping_speed: speed,
+        insurance,
+        declared_value,
+        status: 'pending',
+        estimated_cost: costBreakdown.total,
+        cost_breakdown: costBreakdown
+      }
+    });
+  } catch (error) {
+    console.error('Create order for client error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create order for client'
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/orders/:id
+ * Delete an order (admin only)
+ */
+router.delete('/orders/:id', authMiddleware, isAdmin, (req, res) => {
+  try {
+    const db = req.db;
+    const { id } = req.params;
+    const adminId = req.user.id;
+
+    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    // Delete associated packages first, then the order
+    const deleteOrder = db.transaction(() => {
+      db.prepare('DELETE FROM packages WHERE order_id = ?').run(id);
+      db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+
+      // Log the action
+      const logId = uuidv4();
+      db.prepare(`
+        INSERT INTO admin_logs (id, admin_id, action, details)
+        VALUES (?, ?, ?, ?)
+      `).run(logId, adminId, 'delete_order', JSON.stringify({
+        order_id: id,
+        tracking_number: order.tracking_number,
+        user_id: order.user_id
+      }));
+    });
+
+    deleteOrder();
+
+    // Notify the customer
+    sendInAppNotification(order.user_id, `Order ${order.tracking_number} has been deleted by an administrator.`);
+
+    res.json({
+      success: true,
+      message: `Order ${order.tracking_number} deleted successfully`
+    });
+  } catch (error) {
+    console.error('Delete order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete order'
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/orders/:id/cancel
+ * Cancel an order (admin only)
+ */
+router.put('/orders/:id/cancel', authMiddleware, isAdmin, (req, res) => {
+  try {
+    const db = req.db;
+    const { id } = req.params;
+    const adminId = req.user.id;
+    const { reason } = req.body;
+
+    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    if (order.status === 'delivered') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot cancel a delivered order'
+      });
+    }
+
+    if (order.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Order is already cancelled'
+      });
+    }
+
+    const cancelOrder = db.transaction(() => {
+      db.prepare(`
+        UPDATE orders SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).run(id);
+
+      // Also update associated packages
+      db.prepare(`
+        UPDATE packages SET status = 'lost', updated_at = CURRENT_TIMESTAMP WHERE order_id = ?
+      `).run(id);
+
+      // Log the action
+      const logId = uuidv4();
+      db.prepare(`
+        INSERT INTO admin_logs (id, admin_id, action, details)
+        VALUES (?, ?, ?, ?)
+      `).run(logId, adminId, 'cancel_order', JSON.stringify({
+        order_id: id,
+        tracking_number: order.tracking_number,
+        reason: reason || 'No reason provided'
+      }));
+    });
+
+    cancelOrder();
+
+    // Notify the customer
+    sendInAppNotification(
+      order.user_id,
+      `Order ${order.tracking_number} has been cancelled.${reason ? ` Reason: ${reason}` : ''}`
+    );
+
+    const updatedOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+
+    res.json({
+      success: true,
+      message: `Order ${order.tracking_number} cancelled successfully`,
+      order: {
+        ...updatedOrder,
+        dimensions_json: updatedOrder.dimensions_json ? JSON.parse(updatedOrder.dimensions_json) : null
+      }
+    });
+  } catch (error) {
+    console.error('Cancel order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cancel order'
+    });
+  }
+});
+
+/**
+ * POST /api/admin/orders/:id/request-payment
+ * Request payment from a client for an order (admin only)
+ */
+router.post('/orders/:id/request-payment', authMiddleware, isAdmin, (req, res) => {
+  try {
+    const db = req.db;
+    const { id } = req.params;
+    const adminId = req.user.id;
+    const { amount, notes } = req.body;
+
+    const order = db.prepare(`
+      SELECT o.*, u.email, u.name as customer_name
+      FROM orders o
+      JOIN users u ON o.user_id = u.id
+      WHERE o.id = ?
+    `).get(id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    const paymentAmount = amount || order.actual_cost || order.estimated_cost;
+
+    if (!paymentAmount || paymentAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid payment amount is required. Set actual_cost on the order or provide amount.'
+      });
+    }
+
+    // Send email notification to customer
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const paymentLink = `${frontendUrl}/wallet?pay=${id}&amount=${paymentAmount}`;
+
+    sendPaymentRequestEmail(
+      order.email,
+      order.customer_name,
+      order.tracking_number,
+      paymentAmount,
+      notes || '',
+      paymentLink
+    ).catch((err) => {
+      console.error('Failed to send payment request email:', err);
+    });
+
+    // Also send in-app notification
+    sendInAppNotification(
+      order.user_id,
+      `Payment of KES ${paymentAmount.toLocaleString()} requested for order ${order.tracking_number}.${notes ? ` Note: ${notes}` : ''}`
+    );
+
+    // Log the action
+    const logId = uuidv4();
+    db.prepare(`
+      INSERT INTO admin_logs (id, admin_id, action, details)
+      VALUES (?, ?, ?, ?)
+    `).run(logId, adminId, 'request_payment', JSON.stringify({
+      order_id: id,
+      tracking_number: order.tracking_number,
+      customer_email: order.email,
+      amount: paymentAmount,
+      notes: notes || ''
+    }));
+
+    res.json({
+      success: true,
+      message: `Payment request of KES ${paymentAmount.toLocaleString()} sent to ${order.email}`,
+      payment_request: {
+        order_id: id,
+        tracking_number: order.tracking_number,
+        customer: { email: order.email, name: order.customer_name },
+        amount: paymentAmount,
+        currency: 'KES'
+      }
+    });
+  } catch (error) {
+    console.error('Request payment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send payment request'
     });
   }
 });
