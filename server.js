@@ -6,6 +6,8 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
+import bcrypt from 'bcryptjs';
+import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
 import { initializeDatabase } from './database/init.js';
 
@@ -18,6 +20,65 @@ const __dirname = path.dirname(__filename);
 
 // Initialize database
 const db = initializeDatabase();
+
+function generateReferralCode() {
+  return `REF${Date.now()}${Math.random().toString(36).substr(2, 9)}`.toUpperCase();
+}
+
+function ensureAdminUser(database) {
+  const adminEmail = process.env.ADMIN_EMAIL || 'admin@swiftcargo.co.ke';
+  const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
+
+  const existingAdmin = database
+    .prepare('SELECT id, email FROM users WHERE role = ? OR email = ? LIMIT 1')
+    .get('admin', adminEmail);
+
+  if (existingAdmin) {
+    console.log(`✓ Admin user already exists: ${existingAdmin.email}`);
+    return;
+  }
+
+  const adminId = uuidv4();
+  const adminWalletId = uuidv4();
+  const adminHash = bcrypt.hashSync(adminPassword, 10);
+  const adminRefCode = generateReferralCode();
+  const warehouseId = `SC-ADM-${Date.now()}`;
+
+  const insertAdmin = database.prepare(`
+    INSERT INTO users (
+      id, email, password, name, phone, role, warehouse_id,
+      language_pref, referral_code, wallet_balance, is_active
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const insertWallet = database.prepare(`
+    INSERT INTO wallet (id, user_id, balance, currency)
+    VALUES (?, ?, ?, ?)
+  `);
+
+  const createAdmin = database.transaction(() => {
+    insertAdmin.run(
+      adminId,
+      adminEmail,
+      adminHash,
+      'SwiftCargo Admin',
+      '+254700000000',
+      'admin',
+      warehouseId,
+      'en',
+      adminRefCode,
+      0,
+      1
+    );
+
+    insertWallet.run(adminWalletId, adminId, 0, 'KES');
+  });
+
+  createAdmin();
+  console.log(`✓ Admin user created automatically: ${adminEmail}`);
+}
+
+ensureAdminUser(db);
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -82,8 +143,8 @@ app.use(express.static(path.join(__dirname, 'client', 'dist')));
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -91,7 +152,7 @@ const limiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5, // Stricter limit for auth endpoints
+  max: 5,
   message: 'Too many login attempts, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -101,17 +162,11 @@ app.use('/api/', limiter);
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 
-/**
- * Middleware to attach database instance to requests
- */
 app.use((req, res, next) => {
   req.db = db;
   next();
 });
 
-/**
- * Health check endpoint
- */
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -120,9 +175,6 @@ app.get('/health', (req, res) => {
   });
 });
 
-/**
- * API Routes
- */
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/tracking', trackingRoutes);
@@ -135,17 +187,10 @@ app.use('/api/pricing', pricingRoutes);
 app.use('/api/consolidation', consolidationRoutes);
 app.use('/api/prohibited', prohibitedRoutes);
 
-/**
- * SPA fallback — serve index.html for all non-API routes so that
- * React Router can handle client-side navigation.
- */
 app.get(/^(?!\/api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
 });
 
-/**
- * 404 handler (API routes only)
- */
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -154,9 +199,6 @@ app.use((req, res) => {
   });
 });
 
-/**
- * Global error handler
- */
 app.use((err, req, res, next) => {
   console.error('Error:', err);
 
@@ -167,6 +209,7 @@ app.use((err, req, res, next) => {
         message: 'File size exceeds maximum allowed'
       });
     }
+
     return res.status(400).json({
       success: false,
       message: 'File upload error'
@@ -180,19 +223,17 @@ app.use((err, req, res, next) => {
   });
 });
 
-/**
- * Start server
- */
 const server = app.listen(PORT, () => {
   console.log(`
 ╔════════════════════════════════════════╗
-║         SWIFTCARGO BACKEND              ║
-║     Shipping & Forwarding Service       ║
+║         SWIFTCARGO BACKEND            ║
+║   Shipping & Forwarding Service       ║
 ╚════════════════════════════════════════╝
 
 Server running on http://localhost:${PORT}
 Environment: ${NODE_ENV}
 Database: SQLite (better-sqlite3)
+Admin bootstrap: enabled
 Warehouse: 31 Collingwood Close, Hazel Grove, Stockport, SK7 4LB
 
 API Documentation:
@@ -210,12 +251,9 @@ API Documentation:
 - Prohibited Items: GET /api/prohibited/check
 
 Ready to accept connections...
-  `);
+`);
 });
 
-/**
- * Graceful shutdown
- */
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
   server.close(() => {
