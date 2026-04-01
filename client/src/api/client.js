@@ -47,7 +47,10 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    // Don't redirect for /auth/ routes (login, register, me, etc.)
+    // so that the calling code (e.g. Login.jsx) can handle the error itself.
+    const isAuthRoute = error.config?.url?.includes('/auth/')
+    if (error.response?.status === 401 && !isAuthRoute) {
       clearSession()
       window.location.href = '/login'
     }
