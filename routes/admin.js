@@ -592,4 +592,106 @@ router.get('/logs', authMiddleware, isAdmin, (req, res) => {
   }
 });
 
+/**
+ * GET /api/admin/exchange-rates
+ * Get current admin-set exchange rates
+ */
+router.get('/exchange-rates', authMiddleware, isAdmin, (req, res) => {
+  try {
+    const db = req.db;
+
+    const rates = db.prepare('SELECT currency_pair, rate, updated_at FROM exchange_rates').all();
+
+    const ratesObj = {};
+    let latestUpdate = null;
+
+    rates.forEach((r) => {
+      ratesObj[r.currency_pair] = r.rate;
+      if (!latestUpdate || r.updated_at > latestUpdate) {
+        latestUpdate = r.updated_at;
+      }
+    });
+
+    // If no rates have been set yet, return the default base rates
+    if (rates.length === 0) {
+      ratesObj.USD_KES = 130.5;
+      ratesObj.GBP_KES = 164.2;
+      ratesObj.EUR_KES = 142.8;
+      ratesObj.CNY_KES = 18.2;
+    }
+
+    res.json({
+      success: true,
+      rates: ratesObj,
+      updated_at: latestUpdate
+    });
+  } catch (error) {
+    console.error('Get exchange rates error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch exchange rates'
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/exchange-rates
+ * Set exchange rates for the day
+ */
+router.put('/exchange-rates', authMiddleware, isAdmin, (req, res) => {
+  try {
+    const db = req.db;
+    const { rates } = req.body;
+    const adminId = req.user.id;
+
+    if (!rates || typeof rates !== 'object') {
+      return res.status(400).json({
+        success: false,
+        message: 'rates object is required'
+      });
+    }
+
+    const validPairs = ['USD_KES', 'GBP_KES', 'EUR_KES', 'CNY_KES'];
+    const upsert = db.prepare(`
+      INSERT INTO exchange_rates (currency_pair, rate, updated_by, updated_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(currency_pair)
+      DO UPDATE SET rate = excluded.rate, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP
+    `);
+
+    const updateAll = db.transaction(() => {
+      for (const [pair, rate] of Object.entries(rates)) {
+        if (!validPairs.includes(pair)) {
+          throw new Error(`Invalid currency pair: ${pair}`);
+        }
+        if (typeof rate !== 'number' || rate <= 0) {
+          throw new Error(`Invalid rate for ${pair}: must be a positive number`);
+        }
+        upsert.run(pair, rate, adminId);
+      }
+    });
+
+    updateAll();
+
+    // Log the action
+    const logId = uuidv4();
+    db.prepare(`
+      INSERT INTO admin_logs (id, admin_id, action, details)
+      VALUES (?, ?, ?, ?)
+    `).run(logId, adminId, 'update_exchange_rates', JSON.stringify(rates));
+
+    res.json({
+      success: true,
+      message: 'Exchange rates updated successfully',
+      rates
+    });
+  } catch (error) {
+    console.error('Set exchange rates error:', error);
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to update exchange rates'
+    });
+  }
+});
+
 export default router;
