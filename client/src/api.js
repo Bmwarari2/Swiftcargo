@@ -22,27 +22,31 @@ export const ordersApi = {
   track: (trackingNumber) => api.get(`/tracking/${trackingNumber}`),
 }
 
-// Wallet
+// Wallet — balance lives at GET /wallet (returns { wallet: { balance } })
 export const walletApi = {
-  getBalance: () => api.get('/wallet/balance'),
-  deposit: (method, amount, phoneNumber) =>
-    api.post('/wallet/deposit', { method, amount, phoneNumber }),
+  // Returns { success, wallet: { balance, currency, ... }, recent_transactions }
+  getWallet: () => api.get('/wallet'),
+  // Convenience: returns the wallet balance as a number
+  getBalance: () => api.get('/wallet'),
   getTransactions: () => api.get('/wallet/transactions'),
   getTransactionDetails: (id) => api.get(`/wallet/transactions/${id}`),
+  // Pay for an order from wallet
+  payFromWallet: (orderId, amount) => api.post('/wallet/pay', { order_id: orderId, amount }),
 }
 
 // Pricing
 export const pricingApi = {
-  calculate: (market, weight_kg, dimensions, shipping_speed, insurance, declared_value) =>
+  calculate: (market, weight_kg, dimensions, shipping_speed, insurance) =>
     api.post('/pricing/calculate', {
       market,
       weight_kg,
       dimensions,
       shipping_speed,
       insurance: insurance?.enabled || false,
-      declared_value: insurance?.declaredValue || declared_value || 0,
+      declared_value: insurance?.declaredValue || 0,
     }),
-  getExchangeRates: () => api.get('/pricing/exchange-rates'),
+  // Exchange rates are managed by admin; pricing calculator uses hardcoded rates on the backend
+  // No separate /pricing/exchange-rates endpoint exists
 }
 
 // Warehouse
@@ -73,18 +77,15 @@ export const supportApi = {
     formData.append('subject', subject)
     formData.append('description', description)
     formData.append('priority', priority)
-    if (file) {
-      formData.append('file', file)
-    }
-    return api.post('/support/tickets', formData, {
+    if (file) formData.append('photo', file)
+    return api.post('/tickets', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
-  listTickets: () => api.get('/support/tickets'),
-  getTicket: (id) => api.get(`/support/tickets/${id}`),
-  replyToTicket: (id, message) =>
-    api.post(`/support/tickets/${id}/reply`, { message }),
-  closeTicket: (id) => api.put(`/support/tickets/${id}`, { status: 'closed' }),
+  listTickets: () => api.get('/tickets'),
+  getTicket: (id) => api.get(`/tickets/${id}`),
+  replyToTicket: (id, message) => api.post(`/tickets/${id}/message`, { message }),
+  closeTicket: (id) => api.put(`/tickets/${id}`, { status: 'closed' }),
 }
 
 // Referral
@@ -119,10 +120,8 @@ export const adminApi = {
     api.get('/admin/revenue/export', { params: { startDate, endDate }, responseType: 'blob' }),
 
   listTickets: (filters = {}) => api.get('/admin/tickets', { params: filters }),
-  assignTicket: (id, assignedTo) =>
-    api.put(`/admin/tickets/${id}`, { assignedTo }),
-  updateTicketStatus: (id, status) =>
-    api.put(`/admin/tickets/${id}`, { status }),
+  assignTicket: (id, assignedTo) => api.put(`/admin/tickets/${id}`, { assignedTo }),
+  updateTicketStatus: (id, status) => api.put(`/admin/tickets/${id}`, { status }),
 
   // Exchange rate management
   getExchangeRates: () => api.get('/admin/exchange-rates'),

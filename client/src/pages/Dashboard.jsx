@@ -21,16 +21,34 @@ export const Dashboard = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [ordersRes, walletRes] = await Promise.all([
-          ordersApi.list({ status: ['pending', 'received_at_warehouse', 'in_transit'] }),
+        // Use Promise.allSettled so a single failure doesn't block the whole dashboard
+        const [ordersResult, walletResult] = await Promise.allSettled([
+          ordersApi.list(),
           walletApi.getBalance(),
         ])
 
-        setOrders(ordersRes.data.orders || [])
+        let fetchedOrders = []
+        let walletBalance = 0
+
+        if (ordersResult.status === 'fulfilled') {
+          fetchedOrders = ordersResult.value.data?.orders || []
+        }
+
+        if (walletResult.status === 'fulfilled') {
+          // Backend returns { wallet: { balance } } at GET /wallet
+          walletBalance = walletResult.value.data?.wallet?.balance ?? 0
+        }
+
+        // Filter active orders client-side
+        const activeOrders = fetchedOrders.filter((o) =>
+          ['pending', 'received_at_warehouse', 'consolidating', 'in_transit', 'customs', 'out_for_delivery'].includes(o.status)
+        )
+
+        setOrders(activeOrders)
         setStats({
-          activeOrders: ordersRes.data.orders?.length || 0,
-          walletBalance: walletRes.data.balance || 0,
-          referralEarnings: user?.referralEarnings || 0,
+          activeOrders: activeOrders.length,
+          walletBalance,
+          referralEarnings: user?.referral_earnings || user?.referralEarnings || 0,
         })
       } catch (err) {
         toast.error('Failed to load dashboard')
@@ -75,7 +93,7 @@ export const Dashboard = () => {
   }
 
   const formatStatus = (status) => {
-    return status?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Pending'
+    return status?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || 'Pending'
   }
 
   if (loading) {
@@ -94,9 +112,7 @@ export const Dashboard = () => {
           <h1 className="text-3xl md:text-4xl font-bold text-[#1e3a5f] mb-2">
             {t('dashboard.welcome')}, {user?.name}!
           </h1>
-          <p className="text-gray-600">
-            Here's your shipping overview for today
-          </p>
+          <p className="text-gray-600">Here's your shipping overview for today</p>
         </div>
 
         {/* Warehouse Address Card */}
@@ -133,7 +149,7 @@ export const Dashboard = () => {
             </div>
           </div>
 
-          {/* Wallet Balance */}
+          {/* Wallet Balance — referral credit only */}
           <div className="card hover:shadow-xl transition-shadow">
             <div className="flex items-start justify-between">
               <div>
@@ -141,6 +157,7 @@ export const Dashboard = () => {
                 <h3 className="text-3xl font-bold text-[#1e3a5f]">
                   KES {stats.walletBalance.toLocaleString()}
                 </h3>
+                <p className="text-xs text-gray-400 mt-1">Referral credit</p>
               </div>
               <div className="p-3 bg-green-100 rounded-lg">
                 <Wallet className="text-green-600" size={24} />
@@ -177,8 +194,8 @@ export const Dashboard = () => {
             to="/wallet"
             className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-4 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
           >
-            <Plus size={20} />
-            {t('dashboard.topupWallet')}
+            <Wallet size={20} />
+            View Wallet & Referrals
           </Link>
         </div>
 
@@ -196,24 +213,12 @@ export const Dashboard = () => {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
-                      Tracking #
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
-                      {t('orders.market')}
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
-                      {t('orders.status')}
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
-                      {t('orders.date')}
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
-                      {t('orders.amount')}
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
-                      {t('orders.actions')}
-                    </th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Tracking #</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">{t('orders.market')}</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">{t('orders.status')}</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">{t('orders.date')}</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">{t('orders.amount')}</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">{t('orders.actions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">

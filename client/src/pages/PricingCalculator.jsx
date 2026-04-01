@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Calculator, Info } from 'lucide-react'
+import React, { useState } from 'react'
+import { Calculator, Info, CheckCircle } from 'lucide-react'
 import { useLanguage } from '../context/LanguageContext'
 import { pricingApi } from '../api'
 import toast from 'react-hot-toast'
@@ -7,7 +7,6 @@ import toast from 'react-hot-toast'
 export const PricingCalculator = () => {
   const { t } = useLanguage()
   const [loading, setLoading] = useState(false)
-  const [rates, setRates] = useState({})
   const [formData, setFormData] = useState({
     market: 'UK',
     weight: '1',
@@ -22,21 +21,9 @@ export const PricingCalculator = () => {
 
   const markets = ['UK', 'USA', 'China']
   const shippingSpeeds = [
-    { value: 'economy', label: t('pricing.economy'), surcharge: 0 },
-    { value: 'express', label: t('pricing.express'), surcharge: 0.3 },
+    { value: 'economy', label: t('pricing.economy') },
+    { value: 'express', label: t('pricing.express') },
   ]
-
-  useEffect(() => {
-    const fetchRates = async () => {
-      try {
-        const response = await pricingApi.getExchangeRates()
-        setRates(response.data)
-      } catch (err) {
-        toast.error('Failed to load exchange rates')
-      }
-    }
-    fetchRates()
-  }, [])
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target
@@ -49,7 +36,6 @@ export const PricingCalculator = () => {
   const handleCalculate = async (e) => {
     e.preventDefault()
 
-    // Validation
     if (!formData.weight || parseFloat(formData.weight) <= 0) {
       toast.error('Please enter a valid weight')
       return
@@ -61,23 +47,33 @@ export const PricingCalculator = () => {
         formData.market,
         parseFloat(formData.weight),
         {
-          length: parseFloat(formData.length),
-          width: parseFloat(formData.width),
-          height: parseFloat(formData.height),
+          length: parseFloat(formData.length) || 0,
+          width: parseFloat(formData.width) || 0,
+          height: parseFloat(formData.height) || 0,
         },
         formData.shippingSpeed,
         formData.insurance
-          ? { enabled: true, declaredValue: parseFloat(formData.declaredValue) }
+          ? { enabled: true, declaredValue: parseFloat(formData.declaredValue) || 0 }
           : { enabled: false }
       )
 
-      setResult(response.data)
+      // Backend returns { success, pricing: { summary, breakdown, notes } }
+      if (response.data?.success && response.data?.pricing) {
+        setResult(response.data.pricing)
+      } else {
+        toast.error('Unexpected response from pricing API')
+      }
     } catch (err) {
-      toast.error('Failed to calculate pricing')
+      toast.error(err.response?.data?.message || 'Failed to calculate pricing')
     } finally {
       setLoading(false)
     }
   }
+
+  // Helpers to read the nested breakdown structure
+  const bd = result?.breakdown
+  const sm = result?.summary
+  const dimWeight = bd?.dimensional_weight
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4">
@@ -94,11 +90,9 @@ export const PricingCalculator = () => {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Form Section */}
+          {/* ── Form ── */}
           <div className="card">
-            <h2 className="text-2xl font-bold text-[#1e3a5f] mb-6">
-              {t('pricing.title')}
-            </h2>
+            <h2 className="text-2xl font-bold text-[#1e3a5f] mb-6">{t('pricing.title')}</h2>
 
             <form onSubmit={handleCalculate} className="space-y-4">
               {/* Market */}
@@ -123,7 +117,7 @@ export const PricingCalculator = () => {
               {/* Weight */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {t('pricing.weight')} *
+                  {t('pricing.weight')} (kg) *
                 </label>
                 <input
                   type="number"
@@ -131,7 +125,7 @@ export const PricingCalculator = () => {
                   value={formData.weight}
                   onChange={handleChange}
                   step="0.1"
-                  min="0"
+                  min="0.1"
                   required
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
                 />
@@ -140,45 +134,39 @@ export const PricingCalculator = () => {
               {/* Dimensions */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  {t('pricing.dimensions')}
+                  {t('pricing.dimensions')} (cm)
                 </label>
                 <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <input
-                      type="number"
-                      name="length"
-                      placeholder={t('pricing.length')}
-                      value={formData.length}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent text-sm"
-                    />
-                  </div>
-                  <div>
-                    <input
-                      type="number"
-                      name="width"
-                      placeholder={t('pricing.width')}
-                      value={formData.width}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent text-sm"
-                    />
-                  </div>
-                  <div>
-                    <input
-                      type="number"
-                      name="height"
-                      placeholder={t('pricing.height')}
-                      value={formData.height}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent text-sm"
-                    />
-                  </div>
+                  <input
+                    type="number"
+                    name="length"
+                    placeholder={t('pricing.length')}
+                    value={formData.length}
+                    onChange={handleChange}
+                    step="0.1"
+                    min="0"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] text-sm"
+                  />
+                  <input
+                    type="number"
+                    name="width"
+                    placeholder={t('pricing.width')}
+                    value={formData.width}
+                    onChange={handleChange}
+                    step="0.1"
+                    min="0"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] text-sm"
+                  />
+                  <input
+                    type="number"
+                    name="height"
+                    placeholder={t('pricing.height')}
+                    value={formData.height}
+                    onChange={handleChange}
+                    step="0.1"
+                    min="0"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] text-sm"
+                  />
                 </div>
               </div>
 
@@ -189,10 +177,7 @@ export const PricingCalculator = () => {
                 </label>
                 <div className="flex gap-4">
                   {shippingSpeeds.map((speed) => (
-                    <label
-                      key={speed.value}
-                      className="flex items-center gap-2 cursor-pointer"
-                    >
+                    <label key={speed.value} className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="radio"
                         name="shippingSpeed"
@@ -217,17 +202,14 @@ export const PricingCalculator = () => {
                     onChange={handleChange}
                     className="w-4 h-4 text-[#1e3a5f]"
                   />
-                  <span className="text-sm font-medium text-gray-700">
-                    {t('pricing.insurance')}
-                  </span>
+                  <span className="text-sm font-medium text-gray-700">{t('pricing.insurance')}</span>
                 </label>
               </div>
 
-              {/* Declared Value */}
               {formData.insurance && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    {t('pricing.declaredValue')}
+                    {t('pricing.declaredValue')} (KES)
                   </label>
                   <input
                     type="number"
@@ -240,7 +222,6 @@ export const PricingCalculator = () => {
                 </div>
               )}
 
-              {/* Calculate Button */}
               <button
                 type="submit"
                 disabled={loading}
@@ -252,89 +233,100 @@ export const PricingCalculator = () => {
             </form>
           </div>
 
-          {/* Results Section */}
+          {/* ── Results ── */}
           <div>
             {result ? (
               <div className="card bg-gradient-to-br from-orange-50 to-orange-100">
-                <h2 className="text-2xl font-bold text-[#1e3a5f] mb-6">
-                  {t('pricing.results')}
-                </h2>
+                <div className="flex items-center gap-2 mb-6">
+                  <CheckCircle className="text-green-500" size={24} />
+                  <h2 className="text-2xl font-bold text-[#1e3a5f]">{t('pricing.results')}</h2>
+                </div>
 
-                <div className="space-y-4">
-                  {/* Base Cost */}
-                  <div className="flex justify-between items-center pb-4 border-b border-orange-200">
-                    <span className="text-gray-700">{t('pricing.baseCost')}</span>
+                <div className="space-y-3">
+                  {/* Weight Breakdown */}
+                  {dimWeight && (
+                    <div className="bg-white rounded-lg p-4">
+                      <p className="text-sm font-semibold text-gray-600 mb-2">Weight Calculation</p>
+                      <div className="space-y-1 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Actual weight:</span>
+                          <span className="font-semibold">{dimWeight.actual_weight_kg} kg</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Volumetric weight:</span>
+                          <span className="font-semibold">{dimWeight.dimensional_weight_kg} kg</span>
+                        </div>
+                        <div className="flex justify-between border-t pt-1 mt-1">
+                          <span className="text-gray-700 font-medium">Chargeable weight:</span>
+                          <span className="font-bold text-[#1e3a5f]">{dimWeight.chargeable_weight_kg} kg</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Base Shipping */}
+                  <div className="flex justify-between items-center py-3 border-b border-orange-200">
+                    <div>
+                      <span className="text-gray-700 font-medium">Base Shipping</span>
+                      <p className="text-xs text-gray-500">{bd?.base_shipping?.description}</p>
+                    </div>
                     <span className="font-bold text-gray-900">
-                      USD {result.baseCost?.toFixed(2) || 0}
+                      KES {(bd?.base_shipping?.amount || 0).toLocaleString()}
                     </span>
                   </div>
 
-                  {/* Weight Comparison */}
-                  <div className="bg-white rounded-lg p-4">
-                    <p className="text-sm text-gray-600 mb-2">Weight Calculation</p>
-                    <div className="space-y-1 text-sm">
-                      <div className="flex justify-between">
-                        <span>{t('pricing.actual')}:</span>
-                        <span className="font-semibold">{formData.weight} kg</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>{t('pricing.volumetric')}:</span>
-                        <span className="font-semibold">
-                          {((parseFloat(formData.length) * parseFloat(formData.width) * parseFloat(formData.height)) / 5000).toFixed(2)} kg
-                        </span>
-                      </div>
+                  {/* Handling Fee */}
+                  <div className="flex justify-between items-center py-3 border-b border-orange-200">
+                    <div>
+                      <span className="text-gray-700 font-medium">Handling Fee</span>
+                      <p className="text-xs text-gray-500">{bd?.handling_fee?.description}</p>
                     </div>
+                    <span className="font-bold text-gray-900">
+                      KES {(bd?.handling_fee?.amount || 0).toLocaleString()}
+                    </span>
                   </div>
-
-                  {/* Express Surcharge */}
-                  {formData.shippingSpeed === 'express' && (
-                    <div className="flex justify-between items-center pb-4 border-b border-orange-200">
-                      <span className="text-gray-700">{t('pricing.surcharge')}</span>
-                      <span className="font-bold text-gray-900">
-                        USD {(result.baseCost * 0.3)?.toFixed(2) || 0}
-                      </span>
-                    </div>
-                  )}
 
                   {/* Insurance */}
                   {formData.insurance && (
-                    <div className="flex justify-between items-center pb-4 border-b border-orange-200">
-                      <span className="text-gray-700">{t('pricing.insuranceCost')}</span>
+                    <div className="flex justify-between items-center py-3 border-b border-orange-200">
+                      <span className="text-gray-700">Insurance (3%)</span>
                       <span className="font-bold text-gray-900">
-                        USD {result.insuranceCost?.toFixed(2) || 0}
+                        KES {(bd?.insurance?.amount || 0).toLocaleString()}
                       </span>
                     </div>
                   )}
 
-                  {/* Customs Duty */}
-                  <div className="flex justify-between items-center pb-4 border-b border-orange-200">
-                    <span className="text-gray-700">{t('pricing.estimatedDuty')}</span>
-                    <span className="font-bold text-gray-900">
-                      KES {result.customsDuty?.toLocaleString() || 0}
-                    </span>
-                  </div>
+                  {/* Customs Estimate */}
+                  {(bd?.customs_estimate?.amount || 0) > 0 && (
+                    <div className="flex justify-between items-center py-3 border-b border-orange-200">
+                      <div>
+                        <span className="text-gray-700">Customs Estimate</span>
+                        <p className="text-xs text-gray-500">VAT 16% + Duty 10% — estimate only</p>
+                      </div>
+                      <span className="font-bold text-gray-900">
+                        KES {(bd?.customs_estimate?.amount || 0).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
 
                   {/* Total */}
-                  <div className="bg-[#1e3a5f] text-white rounded-lg p-4 mt-6">
-                    <p className="text-sm mb-2">{t('pricing.total')}</p>
-                    <div className="flex justify-between items-center mb-3">
-                      <span className="text-2xl font-bold">
-                        USD {result.totalUSD?.toFixed(2) || 0}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-2xl font-bold">
-                        KES {result.totalKES?.toLocaleString() || 0}
-                      </span>
-                    </div>
+                  <div className="bg-[#1e3a5f] text-white rounded-lg p-4 mt-2">
+                    <p className="text-sm text-gray-300 mb-1">{t('pricing.total')}</p>
+                    <p className="text-3xl font-bold">
+                      KES {(sm?.total || 0).toLocaleString()}
+                    </p>
+                    <p className="text-xs text-gray-300 mt-1">
+                      {sm?.shipping_speed === 'express' ? 'Express' : 'Economy'} shipping · {sm?.market}
+                    </p>
                   </div>
 
-                  {/* Info Card */}
+                  {/* Delivery time & disclaimer */}
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex gap-3">
                     <Info className="text-blue-600 flex-shrink-0 mt-0.5" size={20} />
-                    <p className="text-sm text-blue-700">
-                      This is an estimate. Final pricing may vary based on actual package weight and dimensions.
-                    </p>
+                    <div className="text-sm text-blue-700 space-y-1">
+                      <p><strong>Estimated delivery:</strong> {result.notes?.delivery_time}</p>
+                      <p>{result.notes?.disclaimer}</p>
+                    </div>
                   </div>
                 </div>
               </div>
