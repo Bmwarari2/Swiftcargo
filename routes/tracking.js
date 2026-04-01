@@ -29,14 +29,6 @@ router.get('/:trackingNumber', optionalAuth, (req, res) => {
       });
     }
 
-    // Check if user owns this order
-    if (req.user && req.user.id !== order.user_id) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied'
-      });
-    }
-
     // Get associated packages
     const packages = db.prepare(`
       SELECT * FROM packages WHERE order_id = ?
