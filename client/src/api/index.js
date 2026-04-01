@@ -131,6 +131,12 @@ export const adminApi = {
   /** Export revenue as CSV (returns a Blob) */
   exportRevenue: (params = {}) =>
     api.get('/admin/revenue/export', { params, responseType: 'blob' }),
+
+  /** Get admin-set exchange rates */
+  getExchangeRates: () => api.get('/admin/exchange-rates'),
+
+  /** Set exchange rates for the day */
+  setExchangeRates: (rates) => api.put('/admin/exchange-rates', { rates }),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
