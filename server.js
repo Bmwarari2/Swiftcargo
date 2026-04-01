@@ -6,6 +6,8 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
@@ -92,6 +94,7 @@ import ticketsRoutes from './routes/tickets.js';
 import pricingRoutes from './routes/pricing.js';
 import consolidationRoutes from './routes/consolidation.js';
 import prohibitedRoutes from './routes/prohibited.js';
+import backupRoutes from './routes/backup.js';
 
 // Create Express app
 const app = express();
@@ -145,23 +148,17 @@ app.use(express.static(path.join(__dirname, 'client', 'dist')));
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
-  message: { success: false, message: 'Too many requests from this IP, please try again later.' },
+  message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-// Auth rate limiter — raised to 20 attempts per 15 min to avoid
-// locking out legitimate users during normal use and development.
-// Returns a proper JSON body so the frontend can show a clear message.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { success: false, message: 'Too many login attempts. Please wait 15 minutes and try again.' },
+  max: 5,
+  message: 'Too many login attempts, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res, next, options) => {
-    res.status(options.statusCode).json(options.message);
-  },
 });
 
 app.use('/api/', limiter);
@@ -192,8 +189,9 @@ app.use('/api/tickets', ticketsRoutes);
 app.use('/api/pricing', pricingRoutes);
 app.use('/api/consolidation', consolidationRoutes);
 app.use('/api/prohibited', prohibitedRoutes);
+app.use('/api/admin/backups', backupRoutes);
 
-app.get(/^\/(?!api).*/, (req, res) => {
+app.get(/^(?!\/api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
 });
 
@@ -259,6 +257,67 @@ API Documentation:
 Ready to accept connections...
 `);
 });
+
+// ── Daily Automatic Backup ──────────────────────────────────────────────
+const BACKUP_DIR = path.join(__dirname, 'backups');
+if (!fs.existsSync(BACKUP_DIR)) {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+}
+
+function runDailyBackup() {
+  try {
+    const backupId = uuidv4();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `swiftcargo-daily-${timestamp}.db`;
+    const filepath = path.join(BACKUP_DIR, filename);
+
+    // Record as in-progress
+    db.prepare(`
+      INSERT INTO backups (id, filename, filepath, size_bytes, checksum, status, created_by)
+      VALUES (?, ?, ?, 0, '', 'in_progress', NULL)
+    `).run(backupId, filename, filepath);
+
+    // Use VACUUM INTO for a consistent backup
+    db.exec(`VACUUM INTO '${filepath.replace(/'/g, "''")}'`);
+
+    // Compute checksum and make immutable
+    const fileBuffer = fs.readFileSync(filepath);
+    const checksum = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+    const stats = fs.statSync(filepath);
+
+    try { fs.chmodSync(filepath, 0o444); } catch {}
+
+    db.prepare(`
+      UPDATE backups SET size_bytes = ?, checksum = ?, status = 'completed' WHERE id = ?
+    `).run(stats.size, checksum, backupId);
+
+    console.log(`✓ Daily backup created: ${filename} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+  } catch (error) {
+    console.error('Daily backup failed:', error);
+  }
+}
+
+// Schedule daily backup at 2 AM (server local time)
+function scheduleDailyBackup() {
+  const now = new Date();
+  const next2AM = new Date(now);
+  next2AM.setHours(2, 0, 0, 0);
+  if (next2AM <= now) {
+    next2AM.setDate(next2AM.getDate() + 1);
+  }
+  const msUntilNext = next2AM.getTime() - now.getTime();
+
+  setTimeout(() => {
+    runDailyBackup();
+    // Then repeat every 24 hours
+    setInterval(runDailyBackup, 24 * 60 * 60 * 1000);
+  }, msUntilNext);
+
+  console.log(`✓ Daily backup scheduled — next run at ${next2AM.toLocaleString()}`);
+}
+
+scheduleDailyBackup();
+// ────────────────────────────────────────────────────────────────────────
 
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
