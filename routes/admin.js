@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { authMiddleware, isAdmin } from '../middleware/auth.js';
 import { v4 as uuidv4 } from 'uuid';
-import { sendAdminPasswordResetEmail, sendPaymentRequestEmail } from '../utils/email.js';
+import { sendAdminPasswordResetEmail, sendPaymentRequestEmail, sendOrderCreatedEmail } from '../utils/email.js';
 import { calculateShippingCost } from '../utils/pricing.js';
 import { sendInAppNotification } from '../utils/notifications.js';
 
@@ -536,6 +536,20 @@ router.post('/orders/create-for-client', authMiddleware, isAdmin, async (req, re
     } catch (e) { await db.query('ROLLBACK'); throw e; }
 
     sendInAppNotification(customer.id, `A new order (${trackingNumber}) has been created for you by SwiftCargo.`);
+
+    // Send email notification to customer (fire-and-forget — don't block the response)
+    const appUrl = process.env.APP_URL || 'https://swiftcargo.up.railway.app';
+    sendOrderCreatedEmail(
+      customer.email,
+      customer.name,
+      trackingNumber,
+      retailer,
+      market,
+      description,
+      speed,
+      `${appUrl}/orders`
+    ).catch((err) => console.warn('Order created email failed (non-fatal):', err.message));
+
     res.status(201).json({
       success: true, message: `Order created for ${customer.name} (${customer.email})`,
       order: { id: orderId, tracking_number: trackingNumber, customer: { id: customer.id, name: customer.name, email: customer.email }, retailer, market, description, weight_kg, dimensions, shipping_speed: speed, insurance, declared_value, status: 'pending', estimated_cost: costBreakdown.total, cost_breakdown: costBreakdown }
