@@ -324,4 +324,133 @@ export async function sendPaymentRequestEmail(toEmail, toName, trackingNumber, a
   return transport.sendMail(mailOptions);
 }
 
-export default { sendPasswordResetEmail, sendAdminPasswordResetEmail, sendPaymentRequestEmail };
+/**
+ * Notify a customer that SwiftCargo has created a new order on their behalf.
+ *
+ * @param {string} toEmail         – Customer email
+ * @param {string} toName          – Customer display name
+ * @param {string} trackingNumber  – Assigned tracking number
+ * @param {string} retailer        – Retailer name
+ * @param {string} market          – Market (UK / USA / China)
+ * @param {string} description     – Package description
+ * @param {string} shippingSpeed   – 'economy' or 'express'
+ * @param {string} dashboardLink   – Link to the customer's orders page
+ * @returns {Promise<object>}      – Nodemailer send result
+ */
+export async function sendOrderCreatedEmail(toEmail, toName, trackingNumber, retailer, market, description, shippingSpeed, dashboardLink) {
+  const transport = await getTransporter();
+
+  const speedLabel = shippingSpeed === 'express' ? 'Express (3–5 days)' : 'Economy (7–14 days)';
+
+  const mailOptions = {
+    from: getFromAddress(),
+    to: toEmail,
+    subject: `New Order Created for You — ${trackingNumber}`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
+      <body style="margin:0;padding:0;background-color:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f3f4f6;padding:40px 20px;">
+          <tr>
+            <td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+                <!-- Header -->
+                <tr>
+                  <td style="background-color:#1e3a5f;padding:32px 40px;text-align:center;">
+                    <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:bold;">
+                      Swift<span style="color:#f97316;">Cargo</span>
+                    </h1>
+                  </td>
+                </tr>
+                <!-- Body -->
+                <tr>
+                  <td style="padding:40px;">
+                    <h2 style="margin:0 0 16px;color:#1e3a5f;font-size:22px;">Your Order Has Been Created</h2>
+                    <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
+                      Hello ${toName || 'there'},
+                    </p>
+                    <p style="margin:0 0 24px;color:#4b5563;font-size:16px;line-height:1.6;">
+                      The SwiftCargo team has created a new order on your behalf. Here are the details:
+                    </p>
+
+                    <!-- Order Details Table -->
+                    <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:8px;padding:20px;margin-bottom:24px;">
+                      <tr>
+                        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
+                          <span style="color:#6b7280;font-size:14px;">Tracking Number</span><br>
+                          <strong style="color:#1e3a5f;font-size:16px;font-family:monospace;">${trackingNumber}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
+                          <span style="color:#6b7280;font-size:14px;">Retailer</span><br>
+                          <strong style="color:#111827;font-size:15px;">${retailer}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
+                          <span style="color:#6b7280;font-size:14px;">Shipping From</span><br>
+                          <strong style="color:#111827;font-size:15px;">${market}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
+                          <span style="color:#6b7280;font-size:14px;">Description</span><br>
+                          <strong style="color:#111827;font-size:15px;">${description}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:8px 0;">
+                          <span style="color:#6b7280;font-size:14px;">Shipping Speed</span><br>
+                          <strong style="color:#111827;font-size:15px;">${speedLabel}</strong>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <p style="margin:0 0 24px;color:#4b5563;font-size:15px;line-height:1.6;">
+                      You will receive further updates as your package moves through our warehouse. Our team will contact you regarding payment once the shipment is confirmed.
+                    </p>
+
+                    <table cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
+                      <tr>
+                        <td style="background-color:#f97316;border-radius:8px;">
+                          <a href="${dashboardLink}" target="_blank"
+                             style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;">
+                            View My Orders
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <p style="margin:0;color:#6b7280;font-size:14px;line-height:1.6;">
+                      If you have any questions, please reach out to our support team via the portal.
+                    </p>
+                  </td>
+                </tr>
+                <!-- Footer -->
+                <tr>
+                  <td style="background-color:#f9fafb;padding:24px 40px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">
+                      SwiftCargo Shipping &amp; Forwarding &bull; Nairobi, Kenya<br>
+                      This is an automated message. Please do not reply to this email.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `,
+    text: `Hello ${toName || 'there'},\n\nThe SwiftCargo team has created a new order on your behalf.\n\nTracking Number: ${trackingNumber}\nRetailer: ${retailer}\nShipping From: ${market}\nDescription: ${description}\nShipping Speed: ${speedLabel}\n\nYou will receive updates as your package progresses. Our team will contact you regarding payment once confirmed.\n\nView your orders: ${dashboardLink}\n\n— SwiftCargo Team`,
+  };
+
+  return transport.sendMail(mailOptions);
+}
+
+export default { sendPasswordResetEmail, sendAdminPasswordResetEmail, sendPaymentRequestEmail, sendOrderCreatedEmail };
