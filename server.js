@@ -11,18 +11,17 @@ import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
 import { initializeDatabase, getPool } from './database/init.js';
 
-// Load environment variables
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname  = path.dirname(__filename);
 
 function generateReferralCode() {
   return `REF${Date.now()}${Math.random().toString(36).substr(2, 9)}`.toUpperCase();
 }
 
 async function ensureAdminUser(pool) {
-  const adminEmail = process.env.ADMIN_EMAIL || 'admin@swiftcargo.co.ke';
+  const adminEmail    = process.env.ADMIN_EMAIL    || 'admin@swiftcargo.co.ke';
   const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
 
   const { rows } = await pool.query(
@@ -31,15 +30,15 @@ async function ensureAdminUser(pool) {
   );
 
   if (rows.length > 0) {
-    console.log(`✓ Admin user already exists: ${rows[0].email}`);
+    console.log(`\u2713 Admin user already exists: ${rows[0].email}`);
     return;
   }
 
-  const adminId = uuidv4();
+  const adminId       = uuidv4();
   const adminWalletId = uuidv4();
-  const adminHash = bcrypt.hashSync(adminPassword, 10);
-  const adminRefCode = generateReferralCode();
-  const warehouseId = `SC-ADM-${Date.now()}`;
+  const adminHash     = bcrypt.hashSync(adminPassword, 10);
+  const adminRefCode  = generateReferralCode();
+  const warehouseId   = `SC-ADM-${Date.now()}`;
 
   const client = await pool.connect();
   try {
@@ -54,7 +53,7 @@ async function ensureAdminUser(pool) {
       [adminWalletId, adminId, 0, 'KES']
     );
     await client.query('COMMIT');
-    console.log(`✓ Admin user created automatically: ${adminEmail}`);
+    console.log(`\u2713 Admin user created automatically: ${adminEmail}`);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -63,23 +62,24 @@ async function ensureAdminUser(pool) {
   }
 }
 
-// Import routes
-import authRoutes from './routes/auth.js';
-import ordersRoutes from './routes/orders.js';
-import trackingRoutes from './routes/tracking.js';
-import adminRoutes from './routes/admin.js';
-import walletRoutes from './routes/wallet.js';
-import exchangeRoutes from './routes/exchange.js';
-import referralRoutes from './routes/referral.js';
-import ticketsRoutes from './routes/tickets.js';
-import pricingRoutes from './routes/pricing.js';
+// Routes
+import authRoutes        from './routes/auth.js';
+import ordersRoutes      from './routes/orders.js';
+import trackingRoutes    from './routes/tracking.js';
+import adminRoutes       from './routes/admin.js';
+import walletRoutes      from './routes/wallet.js';
+import exchangeRoutes    from './routes/exchange.js';
+import referralRoutes    from './routes/referral.js';
+import ticketsRoutes     from './routes/tickets.js';
+import pricingRoutes     from './routes/pricing.js';
 import consolidationRoutes from './routes/consolidation.js';
-import prohibitedRoutes from './routes/prohibited.js';
-import backupRoutes from './routes/backup.js';
+import prohibitedRoutes  from './routes/prohibited.js';
+import backupRoutes      from './routes/backup.js';
+import eventsRoutes      from './routes/events.js';   // SSE
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 5000;
-const NODE_ENV = process.env.NODE_ENV || 'development';
+const NODE_ENV    = process.env.NODE_ENV    || 'development';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3000';
 
 app.set('trust proxy', 1);
@@ -88,9 +88,10 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'https:'],
+      styleSrc:   ["'self'", "'unsafe-inline'"],
+      scriptSrc:  ["'self'"],
+      imgSrc:     ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'"],   // allows EventSource to /api/events
     },
   },
 }));
@@ -100,7 +101,7 @@ const corsOptions = {
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
 };
 app.use(cors(corsOptions));
 app.use(compression());
@@ -110,32 +111,40 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use(express.static(path.join(__dirname, 'client', 'dist')));
 
-const limiter = rateLimit({ windowMs: 15*60*1000, max: 100, standardHeaders: true, legacyHeaders: false });
-const authLimiter = rateLimit({ windowMs: 15*60*1000, max: 5, standardHeaders: true, legacyHeaders: false });
+const limiter     = rateLimit({ windowMs: 15*60*1000, max: 100,  standardHeaders: true, legacyHeaders: false });
+const authLimiter = rateLimit({ windowMs: 15*60*1000, max: 5,    standardHeaders: true, legacyHeaders: false });
 app.use('/api/', limiter);
-app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/login',    authLimiter);
 app.use('/api/auth/register', authLimiter);
 
-// Attach pool to every request as req.db
+// Attach pool to every request
 app.use((req, res, next) => { req.db = getPool(); next(); });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), environment: NODE_ENV, database: 'PostgreSQL (Supabase)' });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    environment: NODE_ENV,
+    database: 'PostgreSQL (Supabase)',
+    realtime: 'SSE',
+  });
 });
 
-app.use('/api/auth', authRoutes);
-app.use('/api/orders', ordersRoutes);
-app.use('/api/tracking', trackingRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/wallet', walletRoutes);
-app.use('/api/exchange', exchangeRoutes);
-app.use('/api/referral', referralRoutes);
-app.use('/api/tickets', ticketsRoutes);
-app.use('/api/pricing', pricingRoutes);
+app.use('/api/auth',          authRoutes);
+app.use('/api/orders',        ordersRoutes);
+app.use('/api/tracking',      trackingRoutes);
+app.use('/api/admin',         adminRoutes);
+app.use('/api/wallet',        walletRoutes);
+app.use('/api/exchange',      exchangeRoutes);
+app.use('/api/referral',      referralRoutes);
+app.use('/api/tickets',       ticketsRoutes);
+app.use('/api/pricing',       pricingRoutes);
 app.use('/api/consolidation', consolidationRoutes);
-app.use('/api/prohibited', prohibitedRoutes);
+app.use('/api/prohibited',    prohibitedRoutes);
 app.use('/api/admin/backups', backupRoutes);
+app.use('/api/events',        eventsRoutes);   // SSE ─ must be after rate-limiter
 
+// SPA fallback
 app.get(/^\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
 });
@@ -147,17 +156,17 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   if (err.name === 'MulterError') {
-    if (err.code === 'FILE_TOO_LARGE') return res.status(400).json({ success: false, message: 'File size exceeds maximum allowed' });
+    if (err.code === 'FILE_TOO_LARGE')
+      return res.status(400).json({ success: false, message: 'File size exceeds maximum allowed' });
     return res.status(400).json({ success: false, message: 'File upload error' });
   }
   res.status(err.status || 500).json({
     success: false,
     message: err.message || 'Internal server error',
-    ...(NODE_ENV === 'development' && { error: err })
+    ...(NODE_ENV === 'development' && { error: err }),
   });
 });
 
-// Start server after DB is ready
 async function start() {
   try {
     await initializeDatabase();
@@ -166,26 +175,30 @@ async function start() {
 
     const server = app.listen(PORT, () => {
       console.log(`
-╔════════════════════════════════════════╗
-║         SWIFTCARGO BACKEND            ║
-║   Shipping & Forwarding Service       ║
-╚════════════════════════════════════════╝
+\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557
+\u2551         SWIFTCARGO BACKEND            \u2551
+\u2551   Shipping & Forwarding Service       \u2551
+\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d
 
-Server running on http://localhost:${PORT}
-Environment:  ${NODE_ENV}
-Database:     PostgreSQL (Supabase)
-Admin:        bootstrapped
+Server   →  http://localhost:${PORT}
+Env      →  ${NODE_ENV}
+Database →  PostgreSQL (Supabase)
+Realtime →  SSE (/api/events)
 
-Ready to accept connections...
+Ready \u2728
 `);
     });
 
+    // Keep SSE connections alive through Node's socket timeout
+    server.keepAliveTimeout = 65_000;
+    server.headersTimeout   = 70_000;
+
     process.on('SIGTERM', () => {
-      console.log('SIGTERM — shutting down gracefully');
+      console.log('SIGTERM \u2014 shutting down gracefully');
       server.close(() => { pool.end(); process.exit(0); });
     });
     process.on('SIGINT', () => {
-      console.log('SIGINT — shutting down gracefully');
+      console.log('SIGINT \u2014 shutting down gracefully');
       server.close(() => { pool.end(); process.exit(0); });
     });
   } catch (err) {
@@ -195,5 +208,4 @@ Ready to accept connections...
 }
 
 start();
-
 export default app;
