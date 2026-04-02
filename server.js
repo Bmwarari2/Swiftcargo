@@ -30,7 +30,7 @@ async function ensureAdminUser(pool) {
   );
 
   if (rows.length > 0) {
-    console.log(`\u2713 Admin user already exists: ${rows[0].email}`);
+    console.log(`✓ Admin user already exists: ${rows[0].email}`);
     return;
   }
 
@@ -53,7 +53,7 @@ async function ensureAdminUser(pool) {
       [adminWalletId, adminId, 0, 'KES']
     );
     await client.query('COMMIT');
-    console.log(`\u2713 Admin user created automatically: ${adminEmail}`);
+    console.log(`✓ Admin user created: ${adminEmail} / password: ${adminPassword}`);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -62,28 +62,42 @@ async function ensureAdminUser(pool) {
   }
 }
 
-// Routes
-import authRoutes        from './routes/auth.js';
-import ordersRoutes      from './routes/orders.js';
-import trackingRoutes    from './routes/tracking.js';
-import adminRoutes       from './routes/admin.js';
-import walletRoutes      from './routes/wallet.js';
-import exchangeRoutes    from './routes/exchange.js';
-import referralRoutes    from './routes/referral.js';
-import ticketsRoutes     from './routes/tickets.js';
-import pricingRoutes     from './routes/pricing.js';
+// ── Routes ────────────────────────────────────────────────────────────────────
+import authRoutes          from './routes/auth.js';
+import ordersRoutes        from './routes/orders.js';
+import trackingRoutes      from './routes/tracking.js';
+import adminRoutes         from './routes/admin.js';
+import walletRoutes        from './routes/wallet.js';
+import exchangeRoutes      from './routes/exchange.js';
+import referralRoutes      from './routes/referral.js';
+import ticketsRoutes       from './routes/tickets.js';
+import pricingRoutes       from './routes/pricing.js';
 import consolidationRoutes from './routes/consolidation.js';
-import prohibitedRoutes  from './routes/prohibited.js';
-import backupRoutes      from './routes/backup.js';
-import eventsRoutes      from './routes/events.js';   // SSE
+import prohibitedRoutes    from './routes/prohibited.js';
+import backupRoutes        from './routes/backup.js';
+import eventsRoutes        from './routes/events.js';
 
-const app  = express();
-const PORT = process.env.PORT || 5000;
-const NODE_ENV    = process.env.NODE_ENV    || 'development';
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3000';
+const app      = express();
+const PORT     = process.env.PORT     || 5000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// ── CORS ──────────────────────────────────────────────────────────────────────
+// CORS_ORIGIN can be:
+//   *                  → allow every origin (useful for Railway where the
+//                        frontend and backend share the same domain via a
+//                        reverse-proxy, or while you're still configuring things)
+//   https://a.com,https://b.com  → comma-separated allow-list
+//
+// On Railway both services typically live under *.up.railway.app so we default
+// to a permissive wildcard.  Tighten this once you know your exact domain.
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
 app.set('trust proxy', 1);
 
+// ── Helmet / CSP ──────────────────────────────────────────────────────────────
+// connectSrc must allow the Railway backend URL as well as the frontend itself.
+// Using '*' for connectSrc keeps things working regardless of domain changes;
+// tighten once you pin a custom domain.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -91,19 +105,35 @@ app.use(helmet({
       styleSrc:   ["'self'", "'unsafe-inline'"],
       scriptSrc:  ["'self'"],
       imgSrc:     ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'"],   // allows EventSource to /api/events
+      connectSrc: ["'self'", 'https:', 'wss:'],   // allow XHR/fetch/SSE to any HTTPS endpoint
     },
   },
 }));
 
-const corsOptions = {
-  origin: CORS_ORIGIN.split(',').map(o => o.trim()),
-  credentials: true,
-  optionsSuccessStatus: 200,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-};
-app.use(cors(corsOptions));
+// ── CORS middleware ───────────────────────────────────────────────────────────
+if (CORS_ORIGIN === '*') {
+  // Wildcard mode — allow all origins
+  // Note: credentials (cookies) cannot be used with wildcard CORS, but since
+  // we rely on the Authorization header (Bearer token) this is fine.
+  app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'], optionsSuccessStatus: 200 }));
+} else {
+  const allowList = CORS_ORIGIN.split(',').map(o => o.trim());
+  app.use(cors({
+    origin: (origin, cb) => {
+      // Allow requests with no origin (curl, Postman, same-origin) or matching origins
+      if (!origin || allowList.includes(origin)) return cb(null, true);
+      cb(new Error(`CORS: origin ${origin} not allowed`));
+    },
+    credentials: true,
+    optionsSuccessStatus: 200,
+    methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+    allowedHeaders: ['Content-Type','Authorization'],
+  }));
+}
+
+// Handle pre-flight for every route
+app.options('*', cors());
+
 app.use(compression());
 app.use(morgan(NODE_ENV === 'development' ? 'dev' : 'combined'));
 app.use(express.json({ limit: '10mb' }));
@@ -111,25 +141,53 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use(express.static(path.join(__dirname, 'client', 'dist')));
 
-const limiter     = rateLimit({ windowMs: 15*60*1000, max: 100,  standardHeaders: true, legacyHeaders: false });
-const authLimiter = rateLimit({ windowMs: 15*60*1000, max: 5,    standardHeaders: true, legacyHeaders: false });
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+// General API limit: 200 requests / 15 min
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Return JSON instead of plain text so the frontend error handler can parse it
+  handler: (req, res) => res.status(429).json({ success: false, message: 'Too many requests, please try again later.' }),
+});
+
+// Auth-specific limit: 20 requests / 15 min (was 5 — too aggressive for testing)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ success: false, message: 'Too many login attempts. Please wait 15 minutes and try again.' }),
+});
+
 app.use('/api/', limiter);
 app.use('/api/auth/login',    authLimiter);
 app.use('/api/auth/register', authLimiter);
 
-// Attach pool to every request
+// ── Attach pool to every request ──────────────────────────────────────────────
 app.use((req, res, next) => { req.db = getPool(); next(); });
 
-app.get('/health', (req, res) => {
+// ── Health check ──────────────────────────────────────────────────────────────
+app.get('/health', async (req, res) => {
+  let dbStatus = 'unknown';
+  try {
+    await getPool().query('SELECT 1');
+    dbStatus = 'connected';
+  } catch (e) {
+    dbStatus = `error: ${e.message}`;
+  }
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     environment: NODE_ENV,
-    database: 'PostgreSQL (Supabase)',
+    database: dbStatus,
+    cors_origin: CORS_ORIGIN,
     realtime: 'SSE',
   });
 });
 
+// ── API routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth',          authRoutes);
 app.use('/api/orders',        ordersRoutes);
 app.use('/api/tracking',      trackingRoutes);
@@ -142,31 +200,38 @@ app.use('/api/pricing',       pricingRoutes);
 app.use('/api/consolidation', consolidationRoutes);
 app.use('/api/prohibited',    prohibitedRoutes);
 app.use('/api/admin/backups', backupRoutes);
-app.use('/api/events',        eventsRoutes);   // SSE ─ must be after rate-limiter
+app.use('/api/events',        eventsRoutes);
 
-// SPA fallback
+// ── SPA fallback ──────────────────────────────────────────────────────────────
 app.get(/^\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
 });
 
+// ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found', path: req.path });
 });
 
+// ── Global error handler ──────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  console.error('Unhandled error:', err);
   if (err.name === 'MulterError') {
     if (err.code === 'FILE_TOO_LARGE')
       return res.status(400).json({ success: false, message: 'File size exceeds maximum allowed' });
     return res.status(400).json({ success: false, message: 'File upload error' });
   }
+  // CORS error from our origin check
+  if (err.message && err.message.startsWith('CORS:')) {
+    return res.status(403).json({ success: false, message: err.message });
+  }
   res.status(err.status || 500).json({
     success: false,
     message: err.message || 'Internal server error',
-    ...(NODE_ENV === 'development' && { error: err }),
+    ...(NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
 
+// ── Start ─────────────────────────────────────────────────────────────────────
 async function start() {
   try {
     await initializeDatabase();
@@ -175,30 +240,30 @@ async function start() {
 
     const server = app.listen(PORT, () => {
       console.log(`
-\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557
-\u2551         SWIFTCARGO BACKEND            \u2551
-\u2551   Shipping & Forwarding Service       \u2551
-\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d
+╔══════════════════════════════════════════╗
+║         SWIFTCARGO BACKEND               ║
+║   Shipping & Forwarding Service          ║
+╚══════════════════════════════════════════╝
 
 Server   →  http://localhost:${PORT}
 Env      →  ${NODE_ENV}
 Database →  PostgreSQL (Supabase)
+CORS     →  ${CORS_ORIGIN}
 Realtime →  SSE (/api/events)
 
-Ready \u2728
+Ready ✨
 `);
     });
 
-    // Keep SSE connections alive through Node's socket timeout
     server.keepAliveTimeout = 65_000;
     server.headersTimeout   = 70_000;
 
     process.on('SIGTERM', () => {
-      console.log('SIGTERM \u2014 shutting down gracefully');
+      console.log('SIGTERM — shutting down gracefully');
       server.close(() => { pool.end(); process.exit(0); });
     });
     process.on('SIGINT', () => {
-      console.log('SIGINT \u2014 shutting down gracefully');
+      console.log('SIGINT — shutting down gracefully');
       server.close(() => { pool.end(); process.exit(0); });
     });
   } catch (err) {

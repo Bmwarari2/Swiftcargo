@@ -1,45 +1,48 @@
 import axios from 'axios'
 
-const BASE_URL =
-  import.meta.env.VITE_API_URL || 'https://swiftcargo-production.up.railway.app'
+// In production (Railway) the frontend is served by the same Express process
+// that also handles /api — so we use a relative base URL ('/api') which avoids
+// all CORS issues entirely.  In development, Vite's proxy forwards /api to
+// localhost:5000, so relative URLs work there too.
+//
+// VITE_API_URL should only be set if the frontend and backend are on DIFFERENT
+// domains (e.g. separate Railway services).  Leave it unset for the default
+// single-service Railway deployment.
+const BASE_URL = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api`
+  : '/api'
 
 const api = axios.create({
-  baseURL: `${BASE_URL}/api`,
+  baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
   timeout: 15000,
 })
 
-// ── Session helpers ────────────────────────────────────────────────────────────
-// Use sessionStorage as primary (survives page navigation within the same tab)
-// with a memory fallback for sandboxed environments where storage is blocked.
+// ── Robust storage helpers ────────────────────────────────────────────────────
+// Try sessionStorage → localStorage → in-memory fallback.
+// This handles sandboxed iframes and Railway environments where storage
+// may be restricted.
 const memStore = {}
 
 function storageSet(key, value) {
-  try {
-    sessionStorage.setItem(key, value)
-    localStorage.setItem(key, value)   // also write to localStorage for persistence
-  } catch (_) {
-    memStore[key] = value              // fallback: in-memory (survives navigation, not refresh)
-  }
+  try { sessionStorage.setItem(key, value) } catch (_) {}
+  try { localStorage.setItem(key, value) }   catch (_) {}
+  memStore[key] = value
 }
 
 function storageGet(key) {
-  try {
-    return sessionStorage.getItem(key) || localStorage.getItem(key) || null
-  } catch (_) {
-    return memStore[key] || null
-  }
+  try { const v = sessionStorage.getItem(key); if (v) return v } catch (_) {}
+  try { const v = localStorage.getItem(key);   if (v) return v } catch (_) {}
+  return memStore[key] || null
 }
 
 function storageRemove(key) {
-  try {
-    sessionStorage.removeItem(key)
-    localStorage.removeItem(key)
-  } catch (_) {
-    delete memStore[key]
-  }
+  try { sessionStorage.removeItem(key) } catch (_) {}
+  try { localStorage.removeItem(key) }   catch (_) {}
+  delete memStore[key]
 }
 
+// ── Session helpers ───────────────────────────────────────────────────────────
 export function saveSession(token, user) {
   storageSet('sc_token', token)
   storageSet('sc_user', JSON.stringify(user))
@@ -67,9 +70,7 @@ export function isLoggedIn() {
 // ── Request interceptor: attach Bearer token ──────────────────────────────────
 api.interceptors.request.use((config) => {
   const token = storageGet('sc_token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
-  }
+  if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
@@ -83,14 +84,18 @@ api.interceptors.response.use(
       window.location.href = '/login'
     }
 
-    let message = 'Something went wrong'
+    let message = 'Something went wrong. Please try again.'
     const data = error.response?.data
     if (data) {
-      if (typeof data === 'string' && data.length < 200) {
+      if (typeof data === 'string' && data.length < 300) {
         message = data
       } else if (typeof data === 'object' && data.message) {
         message = data.message
       }
+    } else if (error.code === 'ECONNABORTED') {
+      message = 'Request timed out. Please check your connection.'
+    } else if (!error.response) {
+      message = 'Cannot reach the server. Please check your connection.'
     } else if (error.message) {
       message = error.message
     }
