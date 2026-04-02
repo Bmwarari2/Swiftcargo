@@ -31,7 +31,9 @@ export const AdminDashboard = () => {
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [createOrderForm, setCreateOrderForm] = useState({
     retailer: '', market: 'UK', description: '',
-    weight_kg: '', shipping_speed: 'economy',
+    weight_kg: '',
+    dimensions: { length: '', width: '', height: '' },
+    shipping_speed: 'economy',
     insurance: false, declared_value: ''
   })
   const [creatingOrder, setCreatingOrder] = useState(false)
@@ -215,18 +217,25 @@ export const AdminDashboard = () => {
     if (!selectedCustomer) { toast.error('Please search and select a customer'); return }
     try {
       setCreatingOrder(true)
+      const { dimensions, ...rest } = createOrderForm
+      const hasDimensions = dimensions.length || dimensions.width || dimensions.height
       await adminApi.createOrderForClient({
         customer_email: selectedCustomer.email,
-        ...createOrderForm,
-        weight_kg: parseFloat(createOrderForm.weight_kg) || 0,
-        declared_value: parseFloat(createOrderForm.declared_value) || 0,
+        ...rest,
+        weight_kg: parseFloat(rest.weight_kg) || 0,
+        declared_value: parseFloat(rest.declared_value) || 0,
+        dimensions: hasDimensions ? {
+          length: parseFloat(dimensions.length) || 0,
+          width: parseFloat(dimensions.width) || 0,
+          height: parseFloat(dimensions.height) || 0,
+        } : null,
       })
       toast.success('Order created successfully')
       setShowCreateOrderForm(false)
       setSelectedCustomer(null)
       setCustomerSearch('')
       setCustomerResults([])
-      setCreateOrderForm({ retailer: '', market: 'UK', description: '', weight_kg: '', shipping_speed: 'economy', insurance: false, declared_value: '' })
+      setCreateOrderForm({ retailer: '', market: 'UK', description: '', weight_kg: '', dimensions: { length: '', width: '', height: '' }, shipping_speed: 'economy', insurance: false, declared_value: '' })
       const ordersRes = await adminApi.listOrders()
       setOrders(ordersRes.data?.orders || [])
     } catch (err) {
@@ -476,16 +485,27 @@ export const AdminDashboard = () => {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Weight (kg)</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Actual Weight (kg)</label>
                       <input type="number" step="0.1" min="0" value={createOrderForm.weight_kg} onChange={(e) => setCreateOrderForm((p) => ({ ...p, weight_kg: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="0.0" />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Shipping Speed</label>
                       <select value={createOrderForm.shipping_speed} onChange={(e) => setCreateOrderForm((p) => ({ ...p, shipping_speed: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]">
-                        <option value="economy">Economy</option>
-                        <option value="express">Express</option>
+                        <option value="economy">Economy (7–14 days)</option>
+                        <option value="express">Express (3–5 days)</option>
                       </select>
                     </div>
+                  </div>
+
+                  {/* Dimensions */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Dimensions (cm) <span className="text-gray-400 font-normal">— optional</span></label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <input type="number" step="0.1" min="0" value={createOrderForm.dimensions.length} onChange={(e) => setCreateOrderForm((p) => ({ ...p, dimensions: { ...p.dimensions, length: e.target.value } }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="L (cm)" />
+                      <input type="number" step="0.1" min="0" value={createOrderForm.dimensions.width} onChange={(e) => setCreateOrderForm((p) => ({ ...p, dimensions: { ...p.dimensions, width: e.target.value } }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="W (cm)" />
+                      <input type="number" step="0.1" min="0" value={createOrderForm.dimensions.height} onChange={(e) => setCreateOrderForm((p) => ({ ...p, dimensions: { ...p.dimensions, height: e.target.value } }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="H (cm)" />
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">Length × Width × Height. Used for volumetric weight calculation if heavier than actual weight.</p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Description *</label>
