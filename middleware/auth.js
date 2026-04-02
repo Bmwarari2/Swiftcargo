@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'swiftcargo-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_jwt_key_change_this_in_production';
 
 export function authMiddleware(req, res, next) {
   // Support token via Authorization header OR ?token= query param (for EventSource)
