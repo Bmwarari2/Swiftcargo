@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Package, Plus, Eye } from 'lucide-react'
+import { Package, Eye } from 'lucide-react'
+
 import { useLanguage } from '../context/LanguageContext'
 import { ordersApi } from '../api'
 import toast from 'react-hot-toast'
@@ -61,20 +62,11 @@ export const Orders = () => {
     <div className="min-h-screen bg-gray-50 py-8 px-4">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl md:text-4xl font-bold text-[#1e3a5f] mb-2">
-              {t('orders.title')}
-            </h1>
-            <p className="text-gray-600">Manage and track all your shipments</p>
-          </div>
-          <Link
-            to="/orders/new"
-            className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors"
-          >
-            <Plus size={20} />
-            {t('orders.new')}
-          </Link>
+        <div className="mb-8">
+          <h1 className="text-3xl md:text-4xl font-bold text-[#1e3a5f] mb-2">
+            {t('orders.title')}
+          </h1>
+          <p className="text-gray-600">Track and view all your shipments</p>
         </div>
 
         {/* Filters */}
@@ -228,13 +220,8 @@ export const Orders = () => {
         ) : (
           <div className="card text-center py-12">
             <Package className="mx-auto text-gray-400 mb-4" size={48} />
-            <p className="text-gray-600 mb-6">{t('orders.noOrders')}</p>
-            <Link
-              to="/orders/new"
-              className="inline-block bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-lg font-bold transition-colors"
-            >
-              {t('orders.new')}
-            </Link>
+            <p className="text-gray-600 mb-2">{t('orders.noOrders')}</p>
+            <p className="text-sm text-gray-400">Orders are created by the SwiftCargo team on your behalf.</p>
           </div>
         )}
       </div>
