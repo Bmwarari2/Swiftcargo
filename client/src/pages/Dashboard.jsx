@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Package, Wallet, TrendingUp, Plus, Eye, Copy, CheckCheck } from 'lucide-react'
+import { Package, Wallet, TrendingUp, Eye, Copy, CheckCheck } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
 import { ordersApi, walletApi } from '../api'
@@ -184,11 +184,11 @@ export const Dashboard = () => {
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
           <Link
-            to="/orders/new"
+            to="/orders"
             className="bg-[#1e3a5f] hover:bg-[#152d4a] text-white px-6 py-4 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
           >
-            <Plus size={20} />
-            {t('dashboard.newOrder')}
+            <Package size={20} />
+            View My Orders
           </Link>
           <Link
             to="/wallet"
@@ -256,13 +256,8 @@ export const Dashboard = () => {
           ) : (
             <div className="text-center py-8">
               <Package className="mx-auto text-gray-400 mb-4" size={48} />
-              <p className="text-gray-600 mb-4">{t('orders.noOrders')}</p>
-              <Link
-                to="/orders/new"
-                className="inline-block bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-bold transition-colors"
-              >
-                {t('orders.new')}
-              </Link>
+              <p className="text-gray-600 mb-2">{t('orders.noOrders')}</p>
+              <p className="text-sm text-gray-400">Orders are created by the SwiftCargo team. Contact support if you need help.</p>
             </div>
           )}
         </div>
