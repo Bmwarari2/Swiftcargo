@@ -13,8 +13,6 @@ import { TrackPackage } from './pages/TrackPackage'
 import { ExchangeRate } from './pages/ExchangeRate'
 import { PricingCalculator } from './pages/PricingCalculator'
 import { Orders } from './pages/Orders'
-import { NewOrder } from './pages/NewOrder'
-import { OrderConfirmation } from './pages/OrderConfirmation'
 import { Wallet } from './pages/Wallet'
 import { Consolidation } from './pages/Consolidation'
 import { ProhibitedItems } from './pages/ProhibitedItems'
@@ -42,9 +40,6 @@ function App() {
           {/* Protected Routes */}
           <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
-          {/* /orders/new and /orders/confirmation must come before /orders/:id */}
-          <Route path="/orders/new" element={<ProtectedRoute><NewOrder /></ProtectedRoute>} />
-          <Route path="/orders/confirmation" element={<ProtectedRoute><OrderConfirmation /></ProtectedRoute>} />
           <Route path="/wallet" element={<ProtectedRoute><Wallet /></ProtectedRoute>} />
           <Route path="/consolidation" element={<ProtectedRoute><Consolidation /></ProtectedRoute>} />
           <Route path="/support" element={<ProtectedRoute><Support /></ProtectedRoute>} />
