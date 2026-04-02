@@ -54,12 +54,16 @@ try {
 
 /**
  * PostgreSQL connection pool (Supabase)
- * Uses the DATABASE_URL environment variable.
- * SSL is required for Supabase — rejectUnauthorized:false handles self-signed certs.
+ *
+ * family: 0  → allow BOTH IPv4 and IPv6 (Node resolves whichever the host returns)
+ * ssl        → required for Supabase
  */
 const pool = new Pool({
   connectionString: rawUrl,
   ssl: { rejectUnauthorized: false },
+  // 0 = auto (IPv4 + IPv6), 4 = IPv4 only, 6 = IPv6 only
+  // Supabase now exposes IPv6 endpoints; 0 lets Node pick the fastest.
+  family: 0,
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
@@ -151,10 +155,10 @@ export async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS transactions (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        type TEXT CHECK(type IN ('deposit','payment','refund','referral_credit')) NOT NULL,
+        type TEXT CHECK(type IN ('deposit','payment','refund','referral_credit','referral_reward')) NOT NULL,
         amount REAL NOT NULL,
         currency TEXT DEFAULT 'KES',
-        payment_method TEXT CHECK(payment_method IN ('mpesa','stripe','paypal','wallet')),
+        payment_method TEXT CHECK(payment_method IN ('mpesa','stripe','paypal','wallet','system')),
         payment_reference TEXT,
         status TEXT CHECK(status IN ('pending','completed','failed')) DEFAULT 'pending',
         created_at TIMESTAMPTZ DEFAULT NOW()
@@ -244,21 +248,21 @@ export async function initializeDatabase() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
 
-      CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
-      CREATE INDEX IF NOT EXISTS idx_orders_tracking_number ON orders(tracking_number);
-      CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-      CREATE INDEX IF NOT EXISTS idx_packages_user_id ON packages(user_id);
-      CREATE INDEX IF NOT EXISTS idx_packages_order_id ON packages(order_id);
+      CREATE INDEX IF NOT EXISTS idx_orders_user_id       ON orders(user_id);
+      CREATE INDEX IF NOT EXISTS idx_orders_tracking      ON orders(tracking_number);
+      CREATE INDEX IF NOT EXISTS idx_orders_status        ON orders(status);
+      CREATE INDEX IF NOT EXISTS idx_packages_user_id     ON packages(user_id);
+      CREATE INDEX IF NOT EXISTS idx_packages_order_id    ON packages(order_id);
       CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
-      CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);
+      CREATE INDEX IF NOT EXISTS idx_tickets_user_id      ON tickets(user_id);
       CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
-      CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_id);
-      CREATE INDEX IF NOT EXISTS idx_referrals_referee_id ON referrals(referee_id);
-      CREATE INDEX IF NOT EXISTS idx_referrals_status ON referrals(status);
-      CREATE INDEX IF NOT EXISTS idx_password_reset_token ON password_reset_tokens(token);
-      CREATE INDEX IF NOT EXISTS idx_backups_created_at ON backups(created_at);
+      CREATE INDEX IF NOT EXISTS idx_referrals_referrer   ON referrals(referrer_id);
+      CREATE INDEX IF NOT EXISTS idx_referrals_referee    ON referrals(referee_id);
+      CREATE INDEX IF NOT EXISTS idx_referrals_status     ON referrals(status);
+      CREATE INDEX IF NOT EXISTS idx_reset_token          ON password_reset_tokens(token);
+      CREATE INDEX IF NOT EXISTS idx_backups_created_at   ON backups(created_at);
     `);
-    console.log('✓ Database schema initialised (PostgreSQL / Supabase)');
+    console.log('✓ Database schema initialised (PostgreSQL / Supabase) — IPv4 + IPv6 enabled');
   } finally {
     client.release();
   }
