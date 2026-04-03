@@ -149,6 +149,131 @@ router.put('/users/:id', authMiddleware, isAdmin, async (req, res) => {
   }
 });
 
+/** DELETE /api/admin/users/:id – Permanently delete a user and all their data */
+router.delete('/users/:id', authMiddleware, isAdmin, async (req, res) => {
+  try {
+    const db = req.db;
+    const { id } = req.params;
+    const adminId = req.user.id;
+
+    // Prevent admin from deleting themselves
+    if (id === adminId) {
+      return res.status(400).json({ success: false, message: 'You cannot delete your own account' });
+    }
+
+    const userRes = await db.query('SELECT id, email, name, role FROM users WHERE id = $1', [id]);
+    if (!userRes.rows[0]) return res.status(404).json({ success: false, message: 'User not found' });
+    const user = userRes.rows[0];
+
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Delete in dependency order (child tables first)
+      await client.query('DELETE FROM ticket_messages WHERE sender_id = $1', [id]);
+      await client.query('DELETE FROM tickets WHERE user_id = $1', [id]);
+      await client.query('DELETE FROM notifications WHERE user_id = $1', [id]);
+      await client.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [id]);
+      await client.query('DELETE FROM packages WHERE user_id = $1', [id]);
+      await client.query('DELETE FROM orders WHERE user_id = $1', [id]);
+      await client.query('DELETE FROM transactions WHERE user_id = $1', [id]);
+      await client.query('DELETE FROM wallet WHERE user_id = $1', [id]);
+      // Handle referrals: remove references but keep the referral records for history
+      await client.query('UPDATE referrals SET referee_id = NULL WHERE referee_id = $1', [id]);
+      await client.query('DELETE FROM referrals WHERE referrer_id = $1', [id]);
+      // Clear referred_by references in other users
+      await client.query('UPDATE users SET referred_by = NULL WHERE referred_by = $1', [id]);
+      // Delete the user
+      await client.query('DELETE FROM users WHERE id = $1', [id]);
+
+      await client.query(
+        'INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1, $2, $3, $4)',
+        [uuidv4(), adminId, 'delete_user', JSON.stringify({
+          deleted_user_id: id,
+          deleted_user_email: user.email,
+          deleted_user_name: user.name,
+          deleted_user_role: user.role
+        })]
+      );
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    res.json({
+      success: true,
+      message: `User ${user.name} (${user.email}) has been permanently deleted`,
+      deleted_user: { id: user.id, email: user.email, name: user.name, role: user.role }
+    });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete user' });
+  }
+});
+
+/** POST /api/admin/test-email – Send a test email to verify SMTP configuration */
+router.post('/test-email', authMiddleware, isAdmin, async (req, res) => {
+  try {
+    const { to } = req.body;
+    const recipientEmail = to || req.user.email;
+
+    // Log current SMTP config (redacted)
+    const smtpConfig = {
+      SMTP_HOST: process.env.SMTP_HOST || '(not set — defaulting to smtp.gmail.com)',
+      SMTP_PORT: process.env.SMTP_PORT || '(not set — defaulting to 465)',
+      SMTP_USER: process.env.SMTP_USER ? `${process.env.SMTP_USER.substring(0, 3)}***` : '(NOT SET)',
+      SMTP_PASS: process.env.SMTP_PASS ? '***set***' : '(NOT SET)',
+      SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || '(not set — defaulting to SwiftCargo)',
+      SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || '(not set)',
+    };
+
+    // Check for missing required vars
+    const missing = [];
+    if (!process.env.SMTP_USER) missing.push('SMTP_USER');
+    if (!process.env.SMTP_PASS) missing.push('SMTP_PASS');
+
+    if (missing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing required SMTP environment variables: ${missing.join(', ')}. Set these in Railway → Variables.`,
+        smtp_config: smtpConfig,
+        help: 'Go to Railway dashboard → your service → Variables tab. Add SMTP_USER (your Gmail/Google Workspace email) and SMTP_PASS (a Google App Password — NOT your regular password).'
+      });
+    }
+
+    // Try to import and send
+    const { sendPasswordResetEmail } = await import('../utils/email.js');
+    await sendPasswordResetEmail(recipientEmail, 'SwiftCargo Admin', 'https://swiftcargo.up.railway.app/test-only-link');
+
+    res.json({
+      success: true,
+      message: `Test email sent successfully to ${recipientEmail}`,
+      smtp_config: smtpConfig
+    });
+  } catch (error) {
+    console.error('Test email error:', error);
+    res.status(500).json({
+      success: false,
+      message: `Email failed: ${error.message}`,
+      smtp_config: {
+        SMTP_HOST: process.env.SMTP_HOST || '(not set — defaulting to smtp.gmail.com)',
+        SMTP_PORT: process.env.SMTP_PORT || '(not set — defaulting to 465)',
+        SMTP_USER: process.env.SMTP_USER ? `${process.env.SMTP_USER.substring(0, 3)}***` : '(NOT SET)',
+        SMTP_PASS: process.env.SMTP_PASS ? '***set***' : '(NOT SET)',
+      },
+      help: error.message.includes('EAUTH')
+        ? 'Authentication failed. Make sure SMTP_PASS is a Google App Password (not your regular password). Go to myaccount.google.com → Security → 2-Step Verification → App passwords.'
+        : error.message.includes('ECONNECTION') || error.message.includes('ETIMEDOUT')
+        ? 'Could not connect to SMTP server. Check SMTP_HOST and SMTP_PORT. Railway may block port 25 — use port 465 (SSL) or 587 (TLS).'
+        : 'Check your SMTP credentials and server settings in Railway environment variables.'
+    });
+  }
+});
+
 /** GET /api/admin/referrals/stats */
 router.get('/referrals/stats', authMiddleware, isAdmin, async (req, res) => {
   try {
