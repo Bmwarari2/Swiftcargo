@@ -215,61 +215,50 @@ router.delete('/users/:id', authMiddleware, isAdmin, async (req, res) => {
   }
 });
 
-/** POST /api/admin/test-email – Send a test email to verify SMTP configuration */
+/** POST /api/admin/test-email – Send a test email to verify Resend configuration */
 router.post('/test-email', authMiddleware, isAdmin, async (req, res) => {
   try {
     const { to } = req.body;
     const recipientEmail = to || req.user.email;
 
-    // Log current SMTP config (redacted)
-    const smtpConfig = {
-      SMTP_HOST: process.env.SMTP_HOST || '(not set — defaulting to smtp.gmail.com)',
-      SMTP_PORT: process.env.SMTP_PORT || '(not set — defaulting to 465)',
-      SMTP_USER: process.env.SMTP_USER ? `${process.env.SMTP_USER.substring(0, 3)}***` : '(NOT SET)',
-      SMTP_PASS: process.env.SMTP_PASS ? '***set***' : '(NOT SET)',
-      SMTP_FROM_NAME: process.env.SMTP_FROM_NAME || '(not set — defaulting to SwiftCargo)',
-      SMTP_FROM_EMAIL: process.env.SMTP_FROM_EMAIL || '(not set)',
+    // Check config
+    const emailConfig = {
+      RESEND_API_KEY: process.env.RESEND_API_KEY ? '***set***' : '(NOT SET)',
+      EMAIL_FROM: process.env.EMAIL_FROM || '(not set — using default onboarding@resend.dev)',
     };
 
-    // Check for missing required vars
-    const missing = [];
-    if (!process.env.SMTP_USER) missing.push('SMTP_USER');
-    if (!process.env.SMTP_PASS) missing.push('SMTP_PASS');
-
-    if (missing.length > 0) {
+    if (!process.env.RESEND_API_KEY) {
       return res.status(400).json({
         success: false,
-        message: `Missing required SMTP environment variables: ${missing.join(', ')}. Set these in Railway → Variables.`,
-        smtp_config: smtpConfig,
-        help: 'Go to Railway dashboard → your service → Variables tab. Add SMTP_USER (your Gmail/Google Workspace email) and SMTP_PASS (a Google App Password — NOT your regular password).'
+        message: 'Missing RESEND_API_KEY environment variable. Set it in Railway → Variables.',
+        email_config: emailConfig,
+        help: 'Sign up at https://resend.com (free — 100 emails/day). Create an API key at https://resend.com/api-keys, then add it as RESEND_API_KEY in Railway → Variables. Also set EMAIL_FROM to your verified sender (e.g. "SwiftCargo <noreply@swiftcargo.co.ke>") or use "SwiftCargo <onboarding@resend.dev>" for testing.'
       });
     }
 
-    // Try to import and send
+    // Try to send
     const { sendPasswordResetEmail } = await import('../utils/email.js');
     await sendPasswordResetEmail(recipientEmail, 'SwiftCargo Admin', 'https://swiftcargo.up.railway.app/test-only-link');
 
     res.json({
       success: true,
       message: `Test email sent successfully to ${recipientEmail}`,
-      smtp_config: smtpConfig
+      email_config: emailConfig
     });
   } catch (error) {
     console.error('Test email error:', error);
     res.status(500).json({
       success: false,
       message: `Email failed: ${error.message}`,
-      smtp_config: {
-        SMTP_HOST: process.env.SMTP_HOST || '(not set — defaulting to smtp.gmail.com)',
-        SMTP_PORT: process.env.SMTP_PORT || '(not set — defaulting to 465)',
-        SMTP_USER: process.env.SMTP_USER ? `${process.env.SMTP_USER.substring(0, 3)}***` : '(NOT SET)',
-        SMTP_PASS: process.env.SMTP_PASS ? '***set***' : '(NOT SET)',
+      email_config: {
+        RESEND_API_KEY: process.env.RESEND_API_KEY ? '***set***' : '(NOT SET)',
+        EMAIL_FROM: process.env.EMAIL_FROM || '(not set)',
       },
-      help: error.message.includes('EAUTH')
-        ? 'Authentication failed. Make sure SMTP_PASS is a Google App Password (not your regular password). Go to myaccount.google.com → Security → 2-Step Verification → App passwords.'
-        : error.message.includes('ECONNECTION') || error.message.includes('ETIMEDOUT')
-        ? 'Could not connect to SMTP server. Check SMTP_HOST and SMTP_PORT. Railway may block port 25 — use port 465 (SSL) or 587 (TLS).'
-        : 'Check your SMTP credentials and server settings in Railway environment variables.'
+      help: error.message.includes('API key')
+        ? 'Invalid API key. Go to https://resend.com/api-keys and create a new one, then update RESEND_API_KEY in Railway.'
+        : error.message.includes('validation')
+        ? 'The sender address needs to be verified. Add and verify your domain at https://resend.com/domains, or use "SwiftCargo <onboarding@resend.dev>" for testing.'
+        : 'Check your Resend API key and sender address in Railway environment variables.'
     });
   }
 });
