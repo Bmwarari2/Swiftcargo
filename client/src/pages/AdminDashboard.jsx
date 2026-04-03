@@ -984,11 +984,11 @@ export const AdminDashboard = () => {
                 <Mail className="text-[#1e3a5f]" size={28} />
                 <div>
                   <h2 className="text-2xl font-bold text-[#1e3a5f]">Email Configuration</h2>
-                  <p className="text-sm text-gray-500">Test your SMTP email setup</p>
+                  <p className="text-sm text-gray-500">Test your Resend email setup</p>
                 </div>
               </div>
               <p className="text-sm text-gray-600 mb-4">
-                Send a test email to verify that the SMTP configuration is working. If emails are not being delivered,
+                Send a test email to verify that the Resend email configuration is working. If emails are not being delivered,
                 this will show you the exact error. The test sends a password reset email to the address you specify.
               </p>
               <div className="space-y-3">
@@ -1014,8 +1014,8 @@ export const AdminDashboard = () => {
                       const msg = data?.message || err.message || 'Email test failed'
                       const help = data?.help || ''
                       toast.error(`${msg}${help ? '\n' + help : ''}`, { id: 'test-email', duration: 8000 })
-                      if (data?.smtp_config) {
-                        console.log('SMTP Config:', data.smtp_config)
+                      if (data?.email_config) {
+                        console.log('Email Config:', data.email_config)
                         console.log('Help:', data.help)
                       }
                     }
@@ -1028,12 +1028,13 @@ export const AdminDashboard = () => {
               <div className="mt-4 p-3 bg-gray-50 rounded-lg">
                 <p className="text-xs font-bold text-gray-600 mb-2">Required Railway environment variables:</p>
                 <ul className="text-xs text-gray-500 space-y-1">
-                  <li><code className="bg-gray-200 px-1 rounded">SMTP_USER</code> — your Gmail / Google Workspace email</li>
-                  <li><code className="bg-gray-200 px-1 rounded">SMTP_PASS</code> — a Google App Password (not your regular password)</li>
-                  <li><code className="bg-gray-200 px-1 rounded">SMTP_HOST</code> — smtp.gmail.com (default)</li>
-                  <li><code className="bg-gray-200 px-1 rounded">SMTP_PORT</code> — 465 (default)</li>
-                  <li><code className="bg-gray-200 px-1 rounded">SMTP_FROM_EMAIL</code> — the "From" address shown in emails</li>
+                  <li><code className="bg-gray-200 px-1 rounded">RESEND_API_KEY</code> — your API key from resend.com/api-keys</li>
+                  <li><code className="bg-gray-200 px-1 rounded">EMAIL_FROM</code> — verified sender, e.g. "SwiftCargo &lt;noreply@swiftcargo.co.ke&gt;"</li>
                 </ul>
+                <p className="text-xs text-gray-400 mt-2">
+                  Sign up free at <a href="https://resend.com" target="_blank" rel="noopener noreferrer" className="text-orange-500 underline">resend.com</a> (100 emails/day free).
+                  For testing, use <code className="bg-gray-200 px-1 rounded">onboarding@resend.dev</code> as the sender.
+                </p>
               </div>
             </div>
           </div>
