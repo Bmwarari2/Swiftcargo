@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import {
   Users, Package, DollarSign, BarChart3, MessageSquare, Activity,
-  Lock, RefreshCw, Trash2, XCircle, Plus, CreditCard, Search
+  Lock, RefreshCw, Trash2, XCircle, Plus, CreditCard, Search,
+  UserPlus, Bell, Mail
 } from 'lucide-react'
 import { useLanguage } from '../context/LanguageContext'
 import { useAuth } from '../context/AuthContext'
@@ -59,6 +60,18 @@ export const AdminDashboard = () => {
   })
   const [savingRates, setSavingRates] = useState(false)
   const [ratesLastUpdated, setRatesLastUpdated] = useState(null)
+
+  // Create user/admin account state
+  const [showCreateUserForm, setShowCreateUserForm] = useState(false)
+  const [createUserForm, setCreateUserForm] = useState({
+    name: '', email: '', phone: '', role: 'customer'
+  })
+  const [creatingUser, setCreatingUser] = useState(false)
+
+  // Payment reminder modal
+  const [reminderModal, setReminderModal] = useState(null) // { orderId, trackingNumber }
+  const [reminderAmount, setReminderAmount] = useState('')
+  const [reminderNotes, setReminderNotes] = useState('')
 
   useEffect(() => { fetchData() }, [])
 
@@ -201,6 +214,42 @@ export const AdminDashboard = () => {
     }
   }
 
+  // ── Create user/admin account ──────────────────────────────────────────
+  const handleCreateUser = async (e) => {
+    e.preventDefault()
+    const { name, email, phone, role } = createUserForm
+    if (!name || !email || !phone) { toast.error('Please fill in all required fields'); return }
+    try {
+      setCreatingUser(true)
+      await adminApi.createUser({ name, email, phone, role })
+      toast.success(`${role === 'admin' ? 'Admin' : 'User'} account created. Welcome email sent to ${email}.`)
+      setShowCreateUserForm(false)
+      setCreateUserForm({ name: '', email: '', phone: '', role: 'customer' })
+      const usersRes = await adminApi.listUsers()
+      setUsers(usersRes.data?.users || [])
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to create account')
+    } finally {
+      setCreatingUser(false)
+    }
+  }
+
+  // ── Send payment reminder ─────────────────────────────────────────────
+  const handleSendReminder = async () => {
+    if (!reminderModal) return
+    const amount = parseFloat(reminderAmount)
+    if (!amount || amount <= 0) { toast.error('Enter a valid amount'); return }
+    try {
+      await adminApi.sendPaymentReminder(reminderModal.orderId, amount, reminderNotes)
+      toast.success('Payment reminder sent to customer')
+      setReminderModal(null)
+      setReminderAmount('')
+      setReminderNotes('')
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to send payment reminder')
+    }
+  }
+
   // ── Customer search (for create order form) ───────────────────────────
   const handleSearchCustomers = async (query) => {
     setCustomerSearch(query)
@@ -258,7 +307,7 @@ export const AdminDashboard = () => {
   const orderStats = stats?.orders || {}
   const marketStats = stats?.markets || []
   const revenueStats = stats?.revenue || {}
-  const marketChartData = marketStats.map((m) => ({ name: m.market, value: m.count }))
+  const marketChartData = marketStats.map((m) => ({ name: m.market, value: parseInt(m.count) || 0, revenue: parseFloat(m.value) || 0 }))
 
   const statusBadge = (status) => {
     const cls = {
@@ -345,7 +394,7 @@ export const AdminDashboard = () => {
                 {stats?.order_statuses?.length > 0 ? (
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
-                      <Pie data={stats.order_statuses.map((s) => ({ name: s.status, value: s.count }))} cx="50%" cy="50%" labelLine={false} label={({ name, value }) => `${name}: ${value}`} outerRadius={80} fill="#8884d8" dataKey="value">
+                      <Pie data={stats.order_statuses.map((s) => ({ name: s.status?.replace(/_/g, ' '), value: parseInt(s.count) || 0 }))} cx="50%" cy="50%" labelLine={false} label={({ name, value }) => `${name}: ${value}`} outerRadius={80} fill="#8884d8" dataKey="value">
                         {stats.order_statuses.map((_, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
                       </Pie>
                       <Tooltip />
@@ -367,14 +416,127 @@ export const AdminDashboard = () => {
                 ) : <p className="text-center text-gray-500 py-8">No market data available</p>}
               </div>
             </div>
+            {/* Sales by Market (Revenue Breakdown) */}
+            {marketStats.length > 0 && (
+              <div className="card">
+                <h2 className="text-xl font-bold text-[#1e3a5f] mb-4">Sales by Market (Revenue)</h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  {marketStats.map((m, i) => (
+                    <div key={m.market} className="rounded-lg p-4" style={{ backgroundColor: `${COLORS[i % COLORS.length]}10` }}>
+                      <p className="text-sm text-gray-600 mb-1">{m.market}</p>
+                      <p className="text-2xl font-bold" style={{ color: COLORS[i % COLORS.length] }}>KES {(parseFloat(m.value) || 0).toLocaleString()}</p>
+                      <p className="text-xs text-gray-500 mt-1">{parseInt(m.count) || 0} order(s)</p>
+                    </div>
+                  ))}
+                </div>
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie data={marketChartData.map((m) => ({ name: m.name, value: m.revenue }))} cx="50%" cy="50%" labelLine={false} label={({ name, value }) => `${name}: KES ${value.toLocaleString()}`} outerRadius={80} fill="#8884d8" dataKey="value">
+                      {marketChartData.map((_, index) => <Cell key={`rev-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip formatter={(value) => `KES ${value.toLocaleString()}`} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
         )}
 
         {/* ═══ Users ═══ */}
         {activeTab === 'users' && (
+          <div className="space-y-6">
+            {/* Create User Button */}
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-[#1e3a5f]">{t('admin.userManagement')}</h2>
+              <button
+                onClick={() => setShowCreateUserForm((v) => !v)}
+                className="flex items-center gap-2 bg-[#1e3a5f] hover:bg-[#152d4a] text-white px-4 py-2 rounded-lg font-bold transition-colors"
+              >
+                <UserPlus size={16} />
+                Create Account
+              </button>
+            </div>
+
+            {/* Create User/Admin Form */}
+            {showCreateUserForm && (
+              <div className="card border-2 border-[#1e3a5f]">
+                <h3 className="text-lg font-bold text-[#1e3a5f] mb-4">Create New Account</h3>
+                <form onSubmit={handleCreateUser} className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+                      <input
+                        type="text"
+                        value={createUserForm.name}
+                        onChange={(e) => setCreateUserForm((p) => ({ ...p, name: e.target.value }))}
+                        required
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+                        placeholder="e.g. John Doe"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+                      <input
+                        type="email"
+                        value={createUserForm.email}
+                        onChange={(e) => setCreateUserForm((p) => ({ ...p, email: e.target.value }))}
+                        required
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+                        placeholder="e.g. john@example.com"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Phone *</label>
+                      <input
+                        type="text"
+                        value={createUserForm.phone}
+                        onChange={(e) => setCreateUserForm((p) => ({ ...p, phone: e.target.value }))}
+                        required
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+                        placeholder="e.g. +254712345678"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Account Type *</label>
+                      <select
+                        value={createUserForm.role}
+                        onChange={(e) => setCreateUserForm((p) => ({ ...p, role: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+                      >
+                        <option value="customer">Customer</option>
+                        <option value="admin">Admin (Full Access)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-500">
+                    The user will receive a welcome email with a link to set up their password.
+                    {createUserForm.role === 'admin' && (
+                      <span className="text-orange-600 font-medium"> This admin will have the same permission levels as your account.</span>
+                    )}
+                  </p>
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="submit"
+                      disabled={creatingUser}
+                      className="bg-[#1e3a5f] hover:bg-[#152d4a] text-white px-6 py-2 rounded-lg font-bold disabled:opacity-50"
+                    >
+                      {creatingUser ? 'Creating...' : `Create ${createUserForm.role === 'admin' ? 'Admin' : 'Customer'} Account`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateUserForm(false)}
+                      className="border border-gray-300 px-6 py-2 rounded-lg font-bold text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
           <div className="card">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-2xl font-bold text-[#1e3a5f]">{t('admin.userManagement')}</h2>
+              <h3 className="text-lg font-bold text-[#1e3a5f]">All Users</h3>
               <span className="text-sm text-gray-500">{users.length} user(s)</span>
             </div>
             <div className="overflow-x-auto">
@@ -413,6 +575,7 @@ export const AdminDashboard = () => {
                 </tbody>
               </table>
             </div>
+          </div>
           </div>
         )}
 
@@ -612,6 +775,16 @@ export const AdminDashboard = () => {
                                 <CreditCard size={15} />
                               </button>
                             )}
+                            {/* Payment Reminder */}
+                            {order.status !== 'cancelled' && order.status !== 'delivered' && (
+                              <button
+                                onClick={() => { setReminderModal({ orderId: order.id, trackingNumber: order.tracking_number }); setReminderAmount(String(order.estimated_cost || '')); setReminderNotes('') }}
+                                title="Send Payment Reminder"
+                                className="p-1.5 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-700 transition-colors"
+                              >
+                                <Bell size={15} />
+                              </button>
+                            )}
                             {/* Cancel */}
                             {order.status !== 'cancelled' && order.status !== 'delivered' && (
                               <button
@@ -802,6 +975,42 @@ export const AdminDashboard = () => {
             <div className="flex gap-3">
               <button onClick={handleCancelOrder} className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white py-2 rounded-lg font-bold">Confirm Cancel</button>
               <button onClick={() => setCancelModal(null)} className="flex-1 border border-gray-300 py-2 rounded-lg font-bold text-gray-700 hover:bg-gray-50">Back</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Payment Reminder Modal ── */}
+      {reminderModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
+            <h3 className="text-lg font-bold text-[#1e3a5f] mb-2">Send Payment Reminder</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Send a payment reminder for order <span className="font-mono font-bold">{reminderModal.trackingNumber}</span>.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (KES) *</label>
+                <input
+                  type="number" min="1" value={reminderAmount}
+                  onChange={(e) => setReminderAmount(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+                  placeholder="Enter amount in KES"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
+                <textarea
+                  value={reminderNotes} onChange={(e) => setReminderNotes(e.target.value)}
+                  rows={2}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+                  placeholder="Any notes for the customer"
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-4">
+              <button onClick={handleSendReminder} className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-2 rounded-lg font-bold">Send Reminder</button>
+              <button onClick={() => setReminderModal(null)} className="flex-1 border border-gray-300 py-2 rounded-lg font-bold text-gray-700 hover:bg-gray-50">Cancel</button>
             </div>
           </div>
         </div>
