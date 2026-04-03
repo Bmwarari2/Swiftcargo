@@ -137,6 +137,30 @@ export const adminApi = {
 
   /** Set exchange rates for the day */
   setExchangeRates: (rates) => api.put('/admin/exchange-rates', { rates }),
+
+  /** Create a new user or admin account */
+  createUser: (data) => api.post('/admin/users/create', data),
+
+  /** Search customers by name/email */
+  searchCustomers: (q) => api.get('/admin/users/search', { params: { q } }),
+
+  /** Request payment from customer */
+  requestPayment: (orderId, amount, notes) =>
+    api.post(`/admin/orders/${orderId}/request-payment`, { amount, notes }),
+
+  /** Send payment reminder email */
+  sendPaymentReminder: (orderId, amount, notes) =>
+    api.post(`/admin/orders/${orderId}/send-reminder`, { amount, notes }),
+
+  /** Cancel an order */
+  cancelOrder: (orderId, reason) =>
+    api.put(`/admin/orders/${orderId}/cancel`, { reason }),
+
+  /** Delete an order */
+  deleteOrder: (orderId) => api.delete(`/admin/orders/${orderId}`),
+
+  /** Create order for a client */
+  createOrderForClient: (data) => api.post('/admin/orders/create-for-client', data),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
