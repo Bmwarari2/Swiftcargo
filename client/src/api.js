@@ -127,6 +127,13 @@ export const adminApi = {
   getExchangeRates: () => api.get('/admin/exchange-rates'),
   setExchangeRates: (rates) => api.put('/admin/exchange-rates', { rates }),
 
+  // Create user/admin account
+  createUser: (data) => api.post('/admin/users/create', data),
+
+  // Send payment reminder email
+  sendPaymentReminder: (orderId, amount, notes) =>
+    api.post(`/admin/orders/${orderId}/send-reminder`, { amount, notes }),
+
   // Backups
   listBackups: (filters = {}) => api.get('/admin/backups', { params: filters }),
   createBackup: () => api.post('/admin/backups'),
