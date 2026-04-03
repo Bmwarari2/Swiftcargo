@@ -212,4 +212,102 @@ router.put('/password', authMiddleware, async (req, res) => {
   }
 });
 
+// POST /api/auth/reset-password
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, new_password } = req.body;
+    const db = req.db;
+
+    if (!token || !new_password) {
+      return res.status(400).json({ success: false, message: 'Token and new password are required' });
+    }
+    if (new_password.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    }
+
+    // Find valid, unused token that hasn't expired
+    const tokenRes = await db.query(
+      `SELECT id, user_id FROM password_reset_tokens
+       WHERE token = $1 AND used = false AND expires_at > NOW()`,
+      [token]
+    );
+    if (tokenRes.rows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired reset link. Please request a new one.' });
+    }
+
+    const { id: tokenId, user_id: userId } = tokenRes.rows[0];
+    const passwordHash = bcrypt.hashSync(new_password, 10);
+
+    await db.query('BEGIN');
+    try {
+      // Update user's password
+      await db.query(
+        'UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2',
+        [passwordHash, userId]
+      );
+      // Mark token as used
+      await db.query(
+        'UPDATE password_reset_tokens SET used = true WHERE id = $1',
+        [tokenId]
+      );
+      // Invalidate any other pending tokens for this user
+      await db.query(
+        'UPDATE password_reset_tokens SET used = true WHERE user_id = $1 AND used = false',
+        [userId]
+      );
+      await db.query('COMMIT');
+    } catch (e) {
+      await db.query('ROLLBACK');
+      throw e;
+    }
+
+    res.json({ success: true, message: 'Password reset successfully. You can now log in with your new password.' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reset password' });
+  }
+});
+
+// POST /api/auth/forgot-password
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    const db = req.db;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required' });
+    }
+
+    const userRes = await db.query('SELECT id, name, email FROM users WHERE email = $1 AND is_active = true', [email.toLowerCase().trim()]);
+
+    // Always return success to prevent email enumeration
+    if (userRes.rows.length === 0) {
+      return res.json({ success: true, message: 'If an account with that email exists, a password reset link has been sent.' });
+    }
+
+    const user = userRes.rows[0];
+    const { randomBytes } = await import('crypto');
+    const token = randomBytes(32).toString('hex');
+    const tokenId = uuidv4();
+    const expiresAt = new Date(Date.now() + 3600000).toISOString(); // 1 hour
+
+    // Invalidate any existing tokens
+    await db.query('UPDATE password_reset_tokens SET used = true WHERE user_id = $1 AND used = false', [user.id]);
+
+    await db.query(
+      'INSERT INTO password_reset_tokens (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)',
+      [tokenId, user.id, token, expiresAt]
+    );
+
+    const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'https://swiftcargo.up.railway.app';
+    const { sendPasswordResetEmail } = await import('../utils/email.js');
+    sendPasswordResetEmail(user.email, user.name, `${frontendUrl}/reset-password?token=${token}`).catch(console.error);
+
+    res.json({ success: true, message: 'If an account with that email exists, a password reset link has been sent.' });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ success: false, message: 'Failed to process request' });
+  }
+});
+
 export default router;
