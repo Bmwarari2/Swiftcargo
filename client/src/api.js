@@ -130,9 +130,15 @@ export const adminApi = {
   // Create user/admin account
   createUser: (data) => api.post('/admin/users/create', data),
 
+  // Delete a user account permanently
+  deleteUser: (id) => api.delete(`/admin/users/${id}`),
+
   // Send payment reminder email
   sendPaymentReminder: (orderId, amount, notes) =>
     api.post(`/admin/orders/${orderId}/send-reminder`, { amount, notes }),
+
+  // Send test email to verify SMTP configuration
+  testEmail: (to) => api.post('/admin/test-email', { to }),
 
   // Backups
   listBackups: (filters = {}) => api.get('/admin/backups', { params: filters }),
