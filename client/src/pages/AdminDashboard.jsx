@@ -551,11 +551,12 @@ export const AdminDashboard = () => {
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Balance</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Joined</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {users.length === 0 ? (
-                    <tr><td colSpan="8" className="px-6 py-8 text-center text-gray-500">No users found</td></tr>
+                    <tr><td colSpan="9" className="px-6 py-8 text-center text-gray-500">No users found</td></tr>
                   ) : users.map((u) => (
                     <tr key={u.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 text-sm font-medium text-gray-900">{u.name}</td>
@@ -570,6 +571,26 @@ export const AdminDashboard = () => {
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600">KES {(u.wallet_balance || 0).toLocaleString()}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
+                      <td className="px-6 py-4">
+                        {u.id !== user?.id && (
+                          <button
+                            onClick={async () => {
+                              if (!window.confirm(`Permanently delete user ${u.name} (${u.email})? This will remove ALL their orders, transactions, and data. This cannot be undone.`)) return
+                              try {
+                                await adminApi.deleteUser(u.id)
+                                toast.success(`User ${u.name} deleted successfully`)
+                                setUsers((prev) => prev.filter((usr) => usr.id !== u.id))
+                              } catch (err) {
+                                toast.error(err.response?.data?.message || err.message || 'Failed to delete user')
+                              }
+                            }}
+                            title="Delete User"
+                            className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 transition-colors"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -928,31 +949,93 @@ export const AdminDashboard = () => {
 
         {/* ═══ Settings ═══ */}
         {activeTab === 'settings' && (
-          <div className="card max-w-lg">
-            <div className="flex items-center gap-3 mb-6">
-              <Lock className="text-[#1e3a5f]" size={28} />
-              <div>
-                <h2 className="text-2xl font-bold text-[#1e3a5f]">Change Admin Password</h2>
-                <p className="text-sm text-gray-500">Logged in as {user?.email}</p>
+          <div className="space-y-6 max-w-lg">
+            {/* Password Change */}
+            <div className="card">
+              <div className="flex items-center gap-3 mb-6">
+                <Lock className="text-[#1e3a5f]" size={28} />
+                <div>
+                  <h2 className="text-2xl font-bold text-[#1e3a5f]">Change Admin Password</h2>
+                  <p className="text-sm text-gray-500">Logged in as {user?.email}</p>
+                </div>
+              </div>
+              <form onSubmit={handlePasswordChange} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
+                  <input type="password" value={passwordForm.currentPassword} onChange={(e) => setPasswordForm((prev) => ({ ...prev, currentPassword: e.target.value }))} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="Enter current password" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+                  <input type="password" value={passwordForm.newPassword} onChange={(e) => setPasswordForm((prev) => ({ ...prev, newPassword: e.target.value }))} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="Enter new password (min 6 characters)" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
+                  <input type="password" value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm((prev) => ({ ...prev, confirmPassword: e.target.value }))} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="Re-enter new password" />
+                </div>
+                <button type="submit" disabled={changingPassword} className="w-full bg-[#1e3a5f] hover:bg-[#152d4a] text-white px-6 py-3 rounded-lg font-bold disabled:opacity-50 transition-colors">
+                  {changingPassword ? 'Changing Password...' : 'Change Password'}
+                </button>
+              </form>
+            </div>
+
+            {/* Email Test */}
+            <div className="card">
+              <div className="flex items-center gap-3 mb-6">
+                <Mail className="text-[#1e3a5f]" size={28} />
+                <div>
+                  <h2 className="text-2xl font-bold text-[#1e3a5f]">Email Configuration</h2>
+                  <p className="text-sm text-gray-500">Test your SMTP email setup</p>
+                </div>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                Send a test email to verify that the SMTP configuration is working. If emails are not being delivered,
+                this will show you the exact error. The test sends a password reset email to the address you specify.
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Send test email to</label>
+                  <input
+                    type="email"
+                    id="testEmailTo"
+                    defaultValue={user?.email || ''}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+                    placeholder="admin@swiftcargo.co.ke"
+                  />
+                </div>
+                <button
+                  onClick={async () => {
+                    const toEmail = document.getElementById('testEmailTo')?.value || user?.email
+                    try {
+                      toast.loading('Sending test email...', { id: 'test-email' })
+                      const res = await adminApi.testEmail(toEmail)
+                      toast.success(res.data?.message || 'Test email sent!', { id: 'test-email' })
+                    } catch (err) {
+                      const data = err.response?.data
+                      const msg = data?.message || err.message || 'Email test failed'
+                      const help = data?.help || ''
+                      toast.error(`${msg}${help ? '\n' + help : ''}`, { id: 'test-email', duration: 8000 })
+                      if (data?.smtp_config) {
+                        console.log('SMTP Config:', data.smtp_config)
+                        console.log('Help:', data.help)
+                      }
+                    }
+                  }}
+                  className="w-full bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-lg font-bold transition-colors"
+                >
+                  Send Test Email
+                </button>
+              </div>
+              <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                <p className="text-xs font-bold text-gray-600 mb-2">Required Railway environment variables:</p>
+                <ul className="text-xs text-gray-500 space-y-1">
+                  <li><code className="bg-gray-200 px-1 rounded">SMTP_USER</code> — your Gmail / Google Workspace email</li>
+                  <li><code className="bg-gray-200 px-1 rounded">SMTP_PASS</code> — a Google App Password (not your regular password)</li>
+                  <li><code className="bg-gray-200 px-1 rounded">SMTP_HOST</code> — smtp.gmail.com (default)</li>
+                  <li><code className="bg-gray-200 px-1 rounded">SMTP_PORT</code> — 465 (default)</li>
+                  <li><code className="bg-gray-200 px-1 rounded">SMTP_FROM_EMAIL</code> — the "From" address shown in emails</li>
+                </ul>
               </div>
             </div>
-            <form onSubmit={handlePasswordChange} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
-                <input type="password" value={passwordForm.currentPassword} onChange={(e) => setPasswordForm((prev) => ({ ...prev, currentPassword: e.target.value }))} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="Enter current password" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
-                <input type="password" value={passwordForm.newPassword} onChange={(e) => setPasswordForm((prev) => ({ ...prev, newPassword: e.target.value }))} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="Enter new password (min 6 characters)" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
-                <input type="password" value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm((prev) => ({ ...prev, confirmPassword: e.target.value }))} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]" placeholder="Re-enter new password" />
-              </div>
-              <button type="submit" disabled={changingPassword} className="w-full bg-[#1e3a5f] hover:bg-[#152d4a] text-white px-6 py-3 rounded-lg font-bold disabled:opacity-50 transition-colors">
-                {changingPassword ? 'Changing Password...' : 'Change Password'}
-              </button>
-            </form>
           </div>
         )}
       </div>
