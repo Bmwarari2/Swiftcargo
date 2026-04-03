@@ -1,95 +1,89 @@
 /**
- * Email service using Google Workspace SMTP.
+ * Email service using Resend HTTP API.
  *
- * nodemailer is loaded lazily via dynamic import so the server can
- * start even when the package is not installed. Email-sending calls
- * will log a warning and resolve gracefully in that case.
+ * Railway blocks outbound SMTP on ports 465/587, so we use Resend's
+ * HTTP-based API (port 443) which works on all cloud platforms.
  *
  * Required environment variables:
- *   SMTP_HOST       – e.g. smtp.gmail.com
- *   SMTP_PORT       – 465 (SSL) or 587 (TLS)
- *   SMTP_USER       – noreply@swiftcargo.co.ke  (the sending account)
- *   SMTP_PASS       – App Password generated in Google Workspace admin
- *   SMTP_FROM_NAME  – Display name, e.g. "SwiftCargo"
- *   SMTP_FROM_EMAIL – From address, e.g. noreply@swiftcargo.co.ke
- *   ADMIN_CONTACT_EMAIL – Admin inbox for notifications, e.g. admin@swiftcargo.co.ke
+ *   RESEND_API_KEY    – API key from https://resend.com/api-keys
+ *   EMAIL_FROM        – Verified sender, e.g. "SwiftCargo <noreply@swiftcargo.co.ke>"
+ *                       (or use Resend's test address: "SwiftCargo <onboarding@resend.dev>")
+ *   ADMIN_CONTACT_EMAIL – Admin inbox for notifications
+ *
+ * Free tier: 100 emails/day, 3,000/month — more than enough to start.
  */
 
-let transporter = null;
-let nodemailerModule = null;
-let transporterVerified = false;
-
-// Lazy-load nodemailer: resolves to the module or null if not installed
-const nodemailerPromise = import('nodemailer')
-  .then(mod => {
-    nodemailerModule = mod.default || mod;
-    return nodemailerModule;
-  })
-  .catch(() => {
-    console.warn('⚠ nodemailer is not installed — email features will be disabled. Run: npm install nodemailer');
-    return null;
-  });
-
-/**
- * Get or create the SMTP transporter with connection pooling and verification.
- */
-async function getTransporter() {
-  if (transporter && transporterVerified) return transporter;
-
-  const nodemailer = await nodemailerPromise;
-  if (!nodemailer) {
-    throw new Error(
-      'nodemailer is not installed. Run: npm install nodemailer'
-    );
-  }
-
-  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const port = parseInt(process.env.SMTP_PORT || '465', 10);
-  const secure = port === 465;
-
-  // Recreate transporter if it existed but failed verification
-  transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-    // Connection pooling for better performance
-    pool: true,
-    maxConnections: 5,
-    maxMessages: 100,
-    // Timeouts to prevent hanging
-    connectionTimeout: 10000,  // 10s to establish connection
-    greetingTimeout: 10000,    // 10s for server greeting
-    socketTimeout: 30000,      // 30s for socket inactivity
-  });
-
-  // Verify SMTP connection on first use
-  try {
-    await transporter.verify();
-    transporterVerified = true;
-    console.log('✅ SMTP connection verified successfully');
-  } catch (err) {
-    console.error('❌ SMTP connection verification failed:', err.message);
-    transporter = null;
-    transporterVerified = false;
-    throw new Error(`SMTP connection failed: ${err.message}`);
-  }
-
-  return transporter;
-}
+const RESEND_API_URL = 'https://api.resend.com/emails';
 
 function getFromAddress() {
-  const name = process.env.SMTP_FROM_NAME || 'SwiftCargo';
-  const email = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'noreply@swiftcargo.co.ke';
-  return `"${name}" <${email}>`;
+  return process.env.EMAIL_FROM
+    || process.env.SMTP_FROM_EMAIL
+    || 'SwiftCargo <onboarding@resend.dev>';
 }
 
 /**
- * Shared email footer HTML.
+ * Send an email via Resend HTTP API with retry logic.
+ *
+ * @param {object} mailOptions  – { from, to, subject, html, text }
+ * @param {number} retries      – Number of retries (default 2)
+ * @returns {Promise<object>}   – Resend API response
  */
+async function sendWithRetry(mailOptions, retries = 2) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    const msg = 'RESEND_API_KEY is not set. Email sending is disabled.';
+    console.error(`❌ ${msg}`);
+    throw new Error(msg);
+  }
+
+  let lastError;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(RESEND_API_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: mailOptions.from,
+          to: Array.isArray(mailOptions.to) ? mailOptions.to : [mailOptions.to],
+          subject: mailOptions.subject,
+          html: mailOptions.html,
+          text: mailOptions.text,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        const errMsg = data.message || data.error || JSON.stringify(data);
+        throw new Error(`Resend API error (${response.status}): ${errMsg}`);
+      }
+
+      console.log(`📧 Email sent to ${mailOptions.to}: ${mailOptions.subject} (attempt ${attempt + 1}) [id: ${data.id}]`);
+      return data;
+    } catch (err) {
+      lastError = err;
+      console.warn(`⚠ Email send attempt ${attempt + 1} failed:`, err.message);
+
+      // Wait before retrying (exponential backoff: 1s, 2s)
+      if (attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
+    }
+  }
+
+  console.error(`❌ Email to ${mailOptions.to} failed after ${retries + 1} attempts:`, lastError.message);
+  throw lastError;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHARED HTML HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function emailFooter() {
   return `
     <tr>
@@ -102,9 +96,6 @@ function emailFooter() {
     </tr>`;
 }
 
-/**
- * Shared email header HTML.
- */
 function emailHeader() {
   return `
     <tr>
@@ -116,9 +107,6 @@ function emailHeader() {
     </tr>`;
 }
 
-/**
- * Wraps body content in the standard SwiftCargo email layout.
- */
 function emailLayout(bodyHtml) {
   return `
     <!DOCTYPE html>
@@ -145,43 +133,6 @@ function emailLayout(bodyHtml) {
       </table>
     </body>
     </html>`;
-}
-
-/**
- * Send an email with retry logic.
- *
- * @param {object} mailOptions  – Nodemailer mail options
- * @param {number} retries      – Number of retries (default 2)
- * @returns {Promise<object>}   – Nodemailer send result
- */
-async function sendWithRetry(mailOptions, retries = 2) {
-  let lastError;
-
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const transport = await getTransporter();
-      const result = await transport.sendMail(mailOptions);
-      console.log(`📧 Email sent to ${mailOptions.to}: ${mailOptions.subject} (attempt ${attempt + 1})`);
-      return result;
-    } catch (err) {
-      lastError = err;
-      console.warn(`⚠ Email send attempt ${attempt + 1} failed:`, err.message);
-
-      // Reset transporter on connection errors so it reconnects
-      if (err.code === 'ECONNECTION' || err.code === 'ESOCKET' || err.code === 'ETIMEDOUT' || err.code === 'EAUTH') {
-        transporter = null;
-        transporterVerified = false;
-      }
-
-      // Wait before retrying (exponential backoff: 1s, 2s)
-      if (attempt < retries) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-      }
-    }
-  }
-
-  console.error(`❌ Email to ${mailOptions.to} failed after ${retries + 1} attempts:`, lastError.message);
-  throw lastError;
 }
 
 
@@ -319,7 +270,7 @@ export async function sendPaymentRequestEmail(toEmail, toName, trackingNumber, a
  * Notify a customer that SwiftCargo has created a new order on their behalf.
  */
 export async function sendOrderCreatedEmail(toEmail, toName, trackingNumber, retailer, market, description, shippingSpeed, dashboardLink) {
-  const speedLabel = shippingSpeed === 'express' ? 'Express (3–5 days)' : 'Economy (7–14 days)';
+  const speedLabel = shippingSpeed === 'express' ? 'Express (3\u20135 days)' : 'Economy (7\u201314 days)';
 
   const bodyHtml = `
     <h2 style="margin:0 0 16px;color:#1e3a5f;font-size:22px;">Your Order Has Been Created</h2>
@@ -394,14 +345,6 @@ export async function sendOrderCreatedEmail(toEmail, toName, trackingNumber, ret
 
 /**
  * Send a welcome email when an admin creates an account for a user.
- * Includes a link to set up their password.
- *
- * @param {string} toEmail         – New user's email
- * @param {string} toName          – New user's name
- * @param {string} warehouseId     – Assigned warehouse ID
- * @param {string} role            – 'customer' or 'admin'
- * @param {string} setPasswordLink – Full URL with token for password setup
- * @returns {Promise<object>}      – Nodemailer send result
  */
 export async function sendWelcomeAccountEmail(toEmail, toName, warehouseId, role, setPasswordLink) {
   const roleLabel = role === 'admin' ? 'Administrator' : 'Customer';
@@ -473,14 +416,6 @@ export async function sendWelcomeAccountEmail(toEmail, toName, warehouseId, role
 
 /**
  * Send a payment reminder email to a customer.
- *
- * @param {string} toEmail         – Customer email
- * @param {string} toName          – Customer display name
- * @param {string} trackingNumber  – Order tracking number
- * @param {number} amount          – Outstanding amount in KES
- * @param {string} notes           – Optional notes from admin
- * @param {string} paymentLink     – Link to wallet/payment page
- * @returns {Promise<object>}      – Nodemailer send result
  */
 export async function sendPaymentReminderEmail(toEmail, toName, trackingNumber, amount, notes, paymentLink) {
   const bodyHtml = `
