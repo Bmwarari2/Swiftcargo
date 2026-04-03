@@ -2,9 +2,26 @@ import express from 'express';
 import crypto from 'crypto';
 import { authMiddleware, isAdmin } from '../middleware/auth.js';
 import { v4 as uuidv4 } from 'uuid';
-import { sendAdminPasswordResetEmail, sendPaymentRequestEmail, sendOrderCreatedEmail } from '../utils/email.js';
+import bcrypt from 'bcryptjs';
+import { sendAdminPasswordResetEmail, sendPaymentRequestEmail, sendOrderCreatedEmail, sendWelcomeAccountEmail, sendPaymentReminderEmail } from '../utils/email.js';
 import { calculateShippingCost } from '../utils/pricing.js';
 import { sendInAppNotification } from '../utils/notifications.js';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_jwt_key_change_this_in_production';
+
+function generateWarehouseId() {
+  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let id = 'SC-';
+  for (let i = 0; i < 4; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
+  return id;
+}
+
+function generateReferralCode() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = 'SC';
+  for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+  return code;
+}
 
 const router = express.Router();
 
@@ -647,6 +664,159 @@ router.post('/orders/:id/request-payment', authMiddleware, isAdmin, async (req, 
   } catch (error) {
     console.error('Request payment error:', error);
     res.status(500).json({ success: false, message: 'Failed to send payment request' });
+  }
+});
+
+/** POST /api/admin/users/create – Admin creates a new user or admin account */
+router.post('/users/create', authMiddleware, isAdmin, async (req, res) => {
+  try {
+    const db = req.db;
+    const adminId = req.user.id;
+    const { name, email, phone, role } = req.body;
+
+    if (!name || !email || !phone) {
+      return res.status(400).json({ success: false, message: 'Name, email, and phone are required' });
+    }
+
+    const accountRole = role || 'customer';
+    if (!['customer', 'admin'].includes(accountRole)) {
+      return res.status(400).json({ success: false, message: 'Invalid role. Must be customer or admin' });
+    }
+
+    // Check if email already exists
+    const existing = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase().trim()]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ success: false, message: 'A user with this email already exists' });
+    }
+
+    const userId = uuidv4();
+    const warehouseId = generateWarehouseId();
+
+    // Generate unique referral code
+    let referralCode = generateReferralCode();
+    while ((await db.query('SELECT id FROM users WHERE referral_code = $1', [referralCode])).rows.length > 0) {
+      referralCode = generateReferralCode();
+    }
+
+    // Create a temporary random password (user will set their own via the email link)
+    const tempPassword = crypto.randomBytes(24).toString('hex');
+    const passwordHash = bcrypt.hashSync(tempPassword, 10);
+
+    // Create password setup token before the transaction
+    const setupToken = crypto.randomBytes(32).toString('hex');
+    const setupTokenId = uuidv4();
+    const expiresAt = new Date(Date.now() + 24 * 3600000).toISOString(); // 24 hours
+
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query(
+        `INSERT INTO users (id, email, password, name, phone, role, warehouse_id, language_pref, referral_code, wallet_balance, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'en', $8, 0, true)`,
+        [userId, email.toLowerCase().trim(), passwordHash, name, phone, accountRole, warehouseId, referralCode]
+      );
+
+      await client.query(
+        `INSERT INTO wallet (id, user_id, balance, currency) VALUES ($1, $2, 0, 'KES')`,
+        [uuidv4(), userId]
+      );
+
+      await client.query(
+        'INSERT INTO password_reset_tokens (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)',
+        [setupTokenId, userId, setupToken, expiresAt]
+      );
+
+      await client.query(
+        'INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1, $2, $3, $4)',
+        [uuidv4(), adminId, 'create_user_account', JSON.stringify({
+          user_id: userId, email: email.toLowerCase().trim(), role: accountRole, warehouse_id: warehouseId
+        })]
+      );
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    // Send welcome email with password setup link (fire-and-forget)
+    const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'https://swiftcargo.up.railway.app';
+    sendWelcomeAccountEmail(
+      email.toLowerCase().trim(),
+      name,
+      warehouseId,
+      accountRole,
+      `${frontendUrl}/reset-password?token=${setupToken}`
+    ).catch((err) => console.warn('Welcome email failed (non-fatal):', err.message));
+
+    res.status(201).json({
+      success: true,
+      message: `${accountRole === 'admin' ? 'Admin' : 'User'} account created. Welcome email sent to ${email}.`,
+      user: { id: userId, email: email.toLowerCase().trim(), name, phone, role: accountRole, warehouse_id: warehouseId, referral_code: referralCode, is_active: true }
+    });
+  } catch (error) {
+    console.error('Create user account error:', error);
+    res.status(500).json({ success: false, message: 'Failed to create account' });
+  }
+});
+
+/** POST /api/admin/orders/:id/send-reminder – Admin sends payment reminder email */
+router.post('/orders/:id/send-reminder', authMiddleware, isAdmin, async (req, res) => {
+  try {
+    const db = req.db;
+    const { id } = req.params;
+    const adminId = req.user.id;
+    const { amount, notes } = req.body;
+
+    const orderRes = await db.query(
+      `SELECT o.*, u.email, u.name AS customer_name FROM orders o JOIN users u ON o.user_id = u.id WHERE o.id = $1`, [id]
+    );
+    if (!orderRes.rows[0]) return res.status(404).json({ success: false, message: 'Order not found' });
+    const order = orderRes.rows[0];
+
+    const reminderAmount = amount || order.actual_cost || order.estimated_cost;
+    if (!reminderAmount || reminderAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'A valid payment amount is required.' });
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'https://swiftcargo.up.railway.app';
+    sendPaymentReminderEmail(
+      order.email,
+      order.customer_name,
+      order.tracking_number,
+      reminderAmount,
+      notes || '',
+      `${frontendUrl}/wallet?pay=${id}&amount=${reminderAmount}`
+    ).catch(console.error);
+
+    sendInAppNotification(
+      order.user_id,
+      `Reminder: Payment of KES ${reminderAmount.toLocaleString()} is due for order ${order.tracking_number}.${notes ? ` Note: ${notes}` : ''}`
+    );
+
+    await db.query(
+      'INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1, $2, $3, $4)',
+      [uuidv4(), adminId, 'send_payment_reminder', JSON.stringify({
+        order_id: id, tracking_number: order.tracking_number,
+        customer_email: order.email, amount: reminderAmount, notes: notes || ''
+      })]
+    );
+
+    res.json({
+      success: true,
+      message: `Payment reminder sent to ${order.email} for KES ${reminderAmount.toLocaleString()}`,
+      reminder: {
+        order_id: id, tracking_number: order.tracking_number,
+        customer: { email: order.email, name: order.customer_name },
+        amount: reminderAmount, currency: 'KES'
+      }
+    });
+  } catch (error) {
+    console.error('Send payment reminder error:', error);
+    res.status(500).json({ success: false, message: 'Failed to send payment reminder' });
   }
 });
 
