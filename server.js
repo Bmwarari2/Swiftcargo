@@ -81,46 +81,28 @@ const app      = express();
 const PORT     = process.env.PORT     || 5000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
-// CORS_ORIGIN can be:
-//   *                  → allow every origin (useful for Railway where the
-//                        frontend and backend share the same domain via a
-//                        reverse-proxy, or while you're still configuring things)
-//   https://a.com,https://b.com  → comma-separated allow-list
-//
-// On Railway both services typically live under *.up.railway.app so we default
-// to a permissive wildcard.  Tighten this once you know your exact domain.
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
 app.set('trust proxy', 1);
 
-// ── Helmet / CSP ──────────────────────────────────────────────────────────────
-// connectSrc must allow the Railway backend URL as well as the frontend itself.
-// Using '*' for connectSrc keeps things working regardless of domain changes;
-// tighten once you pin a custom domain.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
       styleSrc:   ["'self'", "'unsafe-inline'"],
-      scriptSrc:  ["'self'"],
+      scriptSrc:  ["'self'", "'unsafe-inline'"],
       imgSrc:     ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'", 'https:', 'wss:'],   // allow XHR/fetch/SSE to any HTTPS endpoint
+      connectSrc: ["'self'", 'https:', 'wss:'],
     },
   },
 }));
 
-// ── CORS middleware ───────────────────────────────────────────────────────────
 if (CORS_ORIGIN === '*') {
-  // Wildcard mode — allow all origins
-  // Note: credentials (cookies) cannot be used with wildcard CORS, but since
-  // we rely on the Authorization header (Bearer token) this is fine.
   app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'], optionsSuccessStatus: 200 }));
 } else {
   const allowList = CORS_ORIGIN.split(',').map(o => o.trim());
   app.use(cors({
     origin: (origin, cb) => {
-      // Allow requests with no origin (curl, Postman, same-origin) or matching origins
       if (!origin || allowList.includes(origin)) return cb(null, true);
       cb(new Error(`CORS: origin ${origin} not allowed`));
     },
@@ -131,28 +113,26 @@ if (CORS_ORIGIN === '*') {
   }));
 }
 
-// Handle pre-flight for every route
 app.options('*', cors());
 
 app.use(compression());
 app.use(morgan(NODE_ENV === 'development' ? 'dev' : 'combined'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// ── Static files — serve from public/ ────────────────────────────────────────
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use(express.static(path.join(__dirname, 'client', 'dist')));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
-// General API limit: 200 requests / 15 min
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
-  // Return JSON instead of plain text so the frontend error handler can parse it
   handler: (req, res) => res.status(429).json({ success: false, message: 'Too many requests, please try again later.' }),
 });
 
-// Auth-specific limit: 20 requests / 15 min (was 5 — too aggressive for testing)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -202,9 +182,9 @@ app.use('/api/prohibited',    prohibitedRoutes);
 app.use('/api/admin/backups', backupRoutes);
 app.use('/api/events',        eventsRoutes);
 
-// ── SPA fallback ──────────────────────────────────────────────────────────────
+// ── SPA fallback — serve index.html for all non-API routes ───────────────────
 app.get(/^\/(?!api).*/, (req, res) => {
-  res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
@@ -220,7 +200,6 @@ app.use((err, req, res, next) => {
       return res.status(400).json({ success: false, message: 'File size exceeds maximum allowed' });
     return res.status(400).json({ success: false, message: 'File upload error' });
   }
-  // CORS error from our origin check
   if (err.message && err.message.startsWith('CORS:')) {
     return res.status(403).json({ success: false, message: err.message });
   }

@@ -3,7 +3,14 @@ import crypto from 'crypto';
 import { authMiddleware, isAdmin } from '../middleware/auth.js';
 import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
-import { sendAdminPasswordResetEmail, sendPaymentRequestEmail, sendOrderCreatedEmail, sendWelcomeAccountEmail, sendPaymentReminderEmail } from '../utils/email.js';
+import {
+  sendTestEmail,
+  sendAdminPasswordResetEmail,
+  sendPaymentRequestEmail,
+  sendOrderCreatedEmail,
+  sendWelcomeAccountEmail,
+  sendPaymentReminderEmail
+} from '../utils/email.js';
 import { calculateShippingCost } from '../utils/pricing.js';
 import { sendInAppNotification } from '../utils/notifications.js';
 
@@ -149,14 +156,13 @@ router.put('/users/:id', authMiddleware, isAdmin, async (req, res) => {
   }
 });
 
-/** DELETE /api/admin/users/:id – Permanently delete a user and all their data */
+/** DELETE /api/admin/users/:id */
 router.delete('/users/:id', authMiddleware, isAdmin, async (req, res) => {
   try {
     const db = req.db;
     const { id } = req.params;
     const adminId = req.user.id;
 
-    // Prevent admin from deleting themselves
     if (id === adminId) {
       return res.status(400).json({ success: false, message: 'You cannot delete your own account' });
     }
@@ -168,8 +174,6 @@ router.delete('/users/:id', authMiddleware, isAdmin, async (req, res) => {
     const client = await db.connect();
     try {
       await client.query('BEGIN');
-
-      // Delete in dependency order (child tables first)
       await client.query('DELETE FROM ticket_messages WHERE sender_id = $1', [id]);
       await client.query('DELETE FROM tickets WHERE user_id = $1', [id]);
       await client.query('DELETE FROM notifications WHERE user_id = $1', [id]);
@@ -178,24 +182,17 @@ router.delete('/users/:id', authMiddleware, isAdmin, async (req, res) => {
       await client.query('DELETE FROM orders WHERE user_id = $1', [id]);
       await client.query('DELETE FROM transactions WHERE user_id = $1', [id]);
       await client.query('DELETE FROM wallet WHERE user_id = $1', [id]);
-      // Handle referrals: remove references but keep the referral records for history
       await client.query('UPDATE referrals SET referee_id = NULL WHERE referee_id = $1', [id]);
       await client.query('DELETE FROM referrals WHERE referrer_id = $1', [id]);
-      // Clear referred_by references in other users
       await client.query('UPDATE users SET referred_by = NULL WHERE referred_by = $1', [id]);
-      // Delete the user
       await client.query('DELETE FROM users WHERE id = $1', [id]);
-
       await client.query(
         'INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1, $2, $3, $4)',
         [uuidv4(), adminId, 'delete_user', JSON.stringify({
-          deleted_user_id: id,
-          deleted_user_email: user.email,
-          deleted_user_name: user.name,
-          deleted_user_role: user.role
+          deleted_user_id: id, deleted_user_email: user.email,
+          deleted_user_name: user.name, deleted_user_role: user.role
         })]
       );
-
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
@@ -215,34 +212,39 @@ router.delete('/users/:id', authMiddleware, isAdmin, async (req, res) => {
   }
 });
 
-/** POST /api/admin/test-email – Send a test email to verify Resend configuration */
+/**
+ * POST /api/admin/test-email
+ * Sends a clearly labelled TEST email to verify SMTP configuration.
+ * The email subject and body both prominently state it is a test to be ignored.
+ */
 router.post('/test-email', authMiddleware, isAdmin, async (req, res) => {
   try {
     const { to } = req.body;
     const recipientEmail = to || req.user.email;
 
-    // Check config
+    const smtpConfigured = !!(process.env.SMTP_USER && process.env.SMTP_PASS);
     const emailConfig = {
-      RESEND_API_KEY: process.env.RESEND_API_KEY ? '***set***' : '(NOT SET)',
-      EMAIL_FROM: process.env.EMAIL_FROM || '(not set — using default onboarding@resend.dev)',
+      SMTP_HOST: process.env.SMTP_HOST || 'smtp.gmail.com (default)',
+      SMTP_PORT: process.env.SMTP_PORT || '587 (default)',
+      SMTP_USER: process.env.SMTP_USER ? '***set***' : '(NOT SET)',
+      SMTP_PASS: process.env.SMTP_PASS ? '***set***' : '(NOT SET)',
+      EMAIL_FROM: process.env.EMAIL_FROM || '(not set — will use SMTP_USER)',
     };
 
-    if (!process.env.RESEND_API_KEY) {
+    if (!smtpConfigured) {
       return res.status(400).json({
         success: false,
-        message: 'Missing RESEND_API_KEY environment variable. Set it in Railway → Variables.',
+        message: 'Missing SMTP_USER or SMTP_PASS environment variables. Set them in Railway → Variables.',
         email_config: emailConfig,
-        help: 'Sign up at https://resend.com (free — 100 emails/day). Create an API key at https://resend.com/api-keys, then add it as RESEND_API_KEY in Railway → Variables. Also set EMAIL_FROM to your verified sender (e.g. "SwiftCargo <noreply@swiftcargo.co.ke>") or use "SwiftCargo <onboarding@resend.dev>" for testing.'
+        help: 'In Railway → Variables, add: SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_USER=your@gmail.com, SMTP_PASS=your-app-password. Generate an App Password at https://myaccount.google.com/apppasswords (requires 2FA enabled on your Google account).'
       });
     }
 
-    // Try to send
-    const { sendPasswordResetEmail } = await import('../utils/email.js');
-    await sendPasswordResetEmail(recipientEmail, 'SwiftCargo Admin', 'https://swiftcargo.up.railway.app/test-only-link');
+    await sendTestEmail(recipientEmail);
 
     res.json({
       success: true,
-      message: `Test email sent successfully to ${recipientEmail}`,
+      message: `Test email sent successfully to ${recipientEmail}. The email is clearly labelled as a test and should be ignored.`,
       email_config: emailConfig
     });
   } catch (error) {
@@ -251,15 +253,60 @@ router.post('/test-email', authMiddleware, isAdmin, async (req, res) => {
       success: false,
       message: `Email failed: ${error.message}`,
       email_config: {
-        RESEND_API_KEY: process.env.RESEND_API_KEY ? '***set***' : '(NOT SET)',
-        EMAIL_FROM: process.env.EMAIL_FROM || '(not set)',
+        SMTP_HOST: process.env.SMTP_HOST || 'smtp.gmail.com',
+        SMTP_USER: process.env.SMTP_USER ? '***set***' : '(NOT SET)',
+        SMTP_PASS: process.env.SMTP_PASS ? '***set***' : '(NOT SET)',
       },
-      help: error.message.includes('API key')
-        ? 'Invalid API key. Go to https://resend.com/api-keys and create a new one, then update RESEND_API_KEY in Railway.'
-        : error.message.includes('validation')
-        ? 'The sender address needs to be verified. Add and verify your domain at https://resend.com/domains, or use "SwiftCargo <onboarding@resend.dev>" for testing.'
-        : 'Check your Resend API key and sender address in Railway environment variables.'
+      help: error.message.includes('Invalid login') || error.message.includes('535')
+        ? 'Authentication failed. Make sure SMTP_PASS is a Google App Password (not your account password). Generate one at https://myaccount.google.com/apppasswords.'
+        : error.message.includes('SMTP_USER') || error.message.includes('SMTP_PASS')
+        ? 'Set SMTP_USER and SMTP_PASS in Railway → Variables.'
+        : 'Check your SMTP settings in Railway environment variables.'
     });
+  }
+});
+
+/** POST /api/admin/users/:id/reset-password — Admin triggers a password reset for a user */
+router.post('/users/:id/reset-password', authMiddleware, isAdmin, async (req, res) => {
+  try {
+    const db = req.db;
+    const { id } = req.params;
+    const adminId = req.user.id;
+    const userRes = await db.query('SELECT id, name, email FROM users WHERE id = $1', [id]);
+    if (!userRes.rows[0]) return res.status(404).json({ success: false, message: 'User not found' });
+    const user = userRes.rows[0];
+
+    // Invalidate existing tokens
+    await db.query('UPDATE password_reset_tokens SET used = true WHERE user_id = $1 AND used = false', [user.id]);
+
+    // Create new token
+    const token = crypto.randomBytes(32).toString('hex');
+    const tokenId = uuidv4();
+    const expiresAt = new Date(Date.now() + 3600000).toISOString(); // 1 hour
+    await db.query(
+      'INSERT INTO password_reset_tokens (id, user_id, token, expires_at) VALUES ($1,$2,$3,$4)',
+      [tokenId, user.id, token, expiresAt]
+    );
+
+    const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'https://swiftcargo.up.railway.app';
+    const resetLink = `${frontendUrl}/reset-password?token=${token}`;
+
+    // Send email (fire-and-forget so the API responds quickly even if email is slow)
+    sendAdminPasswordResetEmail(user.email, user.name, resetLink).catch(console.error);
+
+    await db.query(
+      'INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1,$2,$3,$4)',
+      [uuidv4(), adminId, 'admin_reset_user_password', JSON.stringify({ user_id: id, user_email: user.email })]
+    );
+
+    res.json({
+      success: true,
+      message: `Password reset email sent to ${user.email}. The link expires in 1 hour.`,
+      reset_link: resetLink   // also returned so admin can copy/share it if needed
+    });
+  } catch (error) {
+    console.error('Admin reset password error:', error);
+    res.status(500).json({ success: false, message: 'Failed to send password reset email' });
   }
 });
 
@@ -422,24 +469,12 @@ router.get('/stats', authMiddleware, isAdmin, async (req, res) => {
   try {
     const db = req.db;
     const [userStats, orderStats, marketStats, statusStats, revenueStats, referralStats] = await Promise.all([
-      db.query(`SELECT COUNT(*) AS total,
-        SUM(CASE WHEN role='customer' THEN 1 ELSE 0 END) AS customers,
-        SUM(CASE WHEN role='admin' THEN 1 ELSE 0 END) AS admins,
-        SUM(CASE WHEN is_active=true THEN 1 ELSE 0 END) AS active_users FROM users`),
-      db.query(`SELECT COUNT(*) AS total_orders,
-        SUM(CASE WHEN status='delivered' THEN 1 ELSE 0 END) AS delivered,
-        SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
-        SUM(CASE WHEN status='in_transit' THEN 1 ELSE 0 END) AS in_transit,
-        AVG(estimated_cost) AS avg_estimated_cost, SUM(estimated_cost) AS total_estimated_value FROM orders`),
+      db.query(`SELECT COUNT(*) AS total, SUM(CASE WHEN role='customer' THEN 1 ELSE 0 END) AS customers, SUM(CASE WHEN role='admin' THEN 1 ELSE 0 END) AS admins, SUM(CASE WHEN is_active=true THEN 1 ELSE 0 END) AS active_users FROM users`),
+      db.query(`SELECT COUNT(*) AS total_orders, SUM(CASE WHEN status='delivered' THEN 1 ELSE 0 END) AS delivered, SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status='in_transit' THEN 1 ELSE 0 END) AS in_transit, AVG(estimated_cost) AS avg_estimated_cost, SUM(estimated_cost) AS total_estimated_value FROM orders`),
       db.query(`SELECT market, COUNT(*) AS count, SUM(estimated_cost) AS value FROM orders GROUP BY market`),
       db.query(`SELECT status, COUNT(*) AS count FROM orders GROUP BY status`),
-      db.query(`SELECT COUNT(*) AS total_transactions,
-        SUM(CASE WHEN status='completed' THEN amount ELSE 0 END) AS total_revenue,
-        SUM(CASE WHEN type='deposit' AND status='completed' THEN amount ELSE 0 END) AS deposits,
-        SUM(CASE WHEN type='payment' AND status='completed' THEN amount ELSE 0 END) AS payments FROM transactions`),
-      db.query(`SELECT COUNT(*) AS total_referrals,
-        SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_referrals,
-        SUM(CASE WHEN status='completed' THEN reward_amount ELSE 0 END) AS total_rewards_paid FROM referrals`)
+      db.query(`SELECT COUNT(*) AS total_transactions, SUM(CASE WHEN status='completed' THEN amount ELSE 0 END) AS total_revenue, SUM(CASE WHEN type='deposit' AND status='completed' THEN amount ELSE 0 END) AS deposits, SUM(CASE WHEN type='payment' AND status='completed' THEN amount ELSE 0 END) AS payments FROM transactions`),
+      db.query(`SELECT COUNT(*) AS total_referrals, SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_referrals, SUM(CASE WHEN status='completed' THEN reward_amount ELSE 0 END) AS total_rewards_paid FROM referrals`)
     ]);
     res.json({
       success: true,
@@ -530,39 +565,6 @@ router.get('/logs', authMiddleware, isAdmin, async (req, res) => {
   } catch (error) {
     console.error('Get logs error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch logs' });
-  }
-});
-
-/** POST /api/admin/users/:id/reset-password */
-router.post('/users/:id/reset-password', authMiddleware, isAdmin, async (req, res) => {
-  try {
-    const db = req.db;
-    const { id } = req.params;
-    const adminId = req.user.id;
-    const userRes = await db.query('SELECT id, name, email FROM users WHERE id = $1', [id]);
-    if (!userRes.rows[0]) return res.status(404).json({ success: false, message: 'User not found' });
-    const user = userRes.rows[0];
-
-    await db.query('UPDATE password_reset_tokens SET used = true WHERE user_id = $1 AND used = false', [user.id]);
-    const token = crypto.randomBytes(32).toString('hex');
-    const tokenId = uuidv4();
-    const expiresAt = new Date(Date.now() + 3600000).toISOString();
-    await db.query(
-      'INSERT INTO password_reset_tokens (id, user_id, token, expires_at) VALUES ($1,$2,$3,$4)',
-      [tokenId, user.id, token, expiresAt]
-    );
-
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    sendAdminPasswordResetEmail(user.email, user.name, `${frontendUrl}/reset-password?token=${token}`).catch(console.error);
-
-    await db.query(
-      'INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1,$2,$3,$4)',
-      [uuidv4(), adminId, 'admin_reset_user_password', JSON.stringify({ user_id: id, user_email: user.email })]
-    );
-    res.json({ success: true, message: `Password reset email sent to ${user.email}` });
-  } catch (error) {
-    console.error('Admin reset password error:', error);
-    res.status(500).json({ success: false, message: 'Failed to send password reset email' });
   }
 });
 
@@ -667,19 +669,9 @@ router.post('/orders/create-for-client', authMiddleware, isAdmin, async (req, re
     } catch (e) { await db.query('ROLLBACK'); throw e; }
 
     sendInAppNotification(customer.id, `A new order (${trackingNumber}) has been created for you by SwiftCargo.`);
-
-    // Send email notification to customer (fire-and-forget — don't block the response)
     const appUrl = process.env.APP_URL || 'https://swiftcargo.up.railway.app';
-    sendOrderCreatedEmail(
-      customer.email,
-      customer.name,
-      trackingNumber,
-      retailer,
-      market,
-      description,
-      speed,
-      `${appUrl}/orders`
-    ).catch((err) => console.warn('Order created email failed (non-fatal):', err.message));
+    sendOrderCreatedEmail(customer.email, customer.name, trackingNumber, retailer, market, description, speed, `${appUrl}/orders`)
+      .catch((err) => console.warn('Order created email failed (non-fatal):', err.message));
 
     res.status(201).json({
       success: true, message: `Order created for ${customer.name} (${customer.email})`,
@@ -765,7 +757,7 @@ router.post('/orders/:id/request-payment', authMiddleware, isAdmin, async (req, 
     if (!paymentAmount || paymentAmount <= 0)
       return res.status(400).json({ success: false, message: 'A valid payment amount is required.' });
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'https://swiftcargo.up.railway.app';
     sendPaymentRequestEmail(order.email, order.customer_name, order.tracking_number, paymentAmount, notes || '', `${frontendUrl}/wallet?pay=${id}&amount=${paymentAmount}`).catch(console.error);
     sendInAppNotification(order.user_id, `Payment of KES ${paymentAmount.toLocaleString()} requested for order ${order.tracking_number}.${notes ? ` Note: ${notes}` : ''}`);
     await db.query('INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1,$2,$3,$4)',
@@ -781,7 +773,7 @@ router.post('/orders/:id/request-payment', authMiddleware, isAdmin, async (req, 
   }
 });
 
-/** POST /api/admin/users/create – Admin creates a new user or admin account */
+/** POST /api/admin/users/create */
 router.post('/users/create', authMiddleware, isAdmin, async (req, res) => {
   try {
     const db = req.db;
@@ -797,7 +789,6 @@ router.post('/users/create', authMiddleware, isAdmin, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid role. Must be customer or admin' });
     }
 
-    // Check if email already exists
     const existing = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase().trim()]);
     if (existing.rows.length > 0) {
       return res.status(409).json({ success: false, message: 'A user with this email already exists' });
@@ -805,49 +796,34 @@ router.post('/users/create', authMiddleware, isAdmin, async (req, res) => {
 
     const userId = uuidv4();
     const warehouseId = generateWarehouseId();
-
-    // Generate unique referral code
     let referralCode = generateReferralCode();
     while ((await db.query('SELECT id FROM users WHERE referral_code = $1', [referralCode])).rows.length > 0) {
       referralCode = generateReferralCode();
     }
 
-    // Create a temporary random password (user will set their own via the email link)
     const tempPassword = crypto.randomBytes(24).toString('hex');
     const passwordHash = bcrypt.hashSync(tempPassword, 10);
-
-    // Create password setup token before the transaction
     const setupToken = crypto.randomBytes(32).toString('hex');
     const setupTokenId = uuidv4();
-    const expiresAt = new Date(Date.now() + 24 * 3600000).toISOString(); // 24 hours
+    const expiresAt = new Date(Date.now() + 24 * 3600000).toISOString();
 
     const client = await db.connect();
     try {
       await client.query('BEGIN');
-
       await client.query(
         `INSERT INTO users (id, email, password, name, phone, role, warehouse_id, language_pref, referral_code, wallet_balance, is_active)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'en', $8, 0, true)`,
         [userId, email.toLowerCase().trim(), passwordHash, name, phone, accountRole, warehouseId, referralCode]
       );
-
-      await client.query(
-        `INSERT INTO wallet (id, user_id, balance, currency) VALUES ($1, $2, 0, 'KES')`,
-        [uuidv4(), userId]
-      );
-
+      await client.query(`INSERT INTO wallet (id, user_id, balance, currency) VALUES ($1, $2, 0, 'KES')`, [uuidv4(), userId]);
       await client.query(
         'INSERT INTO password_reset_tokens (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)',
         [setupTokenId, userId, setupToken, expiresAt]
       );
-
       await client.query(
         'INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1, $2, $3, $4)',
-        [uuidv4(), adminId, 'create_user_account', JSON.stringify({
-          user_id: userId, email: email.toLowerCase().trim(), role: accountRole, warehouse_id: warehouseId
-        })]
+        [uuidv4(), adminId, 'create_user_account', JSON.stringify({ user_id: userId, email: email.toLowerCase().trim(), role: accountRole, warehouse_id: warehouseId })]
       );
-
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
@@ -856,13 +832,9 @@ router.post('/users/create', authMiddleware, isAdmin, async (req, res) => {
       client.release();
     }
 
-    // Send welcome email with password setup link (fire-and-forget)
     const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'https://swiftcargo.up.railway.app';
     sendWelcomeAccountEmail(
-      email.toLowerCase().trim(),
-      name,
-      warehouseId,
-      accountRole,
+      email.toLowerCase().trim(), name, warehouseId, accountRole,
       `${frontendUrl}/reset-password?token=${setupToken}`
     ).catch((err) => console.warn('Welcome email failed (non-fatal):', err.message));
 
@@ -877,7 +849,7 @@ router.post('/users/create', authMiddleware, isAdmin, async (req, res) => {
   }
 });
 
-/** POST /api/admin/orders/:id/send-reminder – Admin sends payment reminder email */
+/** POST /api/admin/orders/:id/send-reminder */
 router.post('/orders/:id/send-reminder', authMiddleware, isAdmin, async (req, res) => {
   try {
     const db = req.db;
@@ -897,36 +869,16 @@ router.post('/orders/:id/send-reminder', authMiddleware, isAdmin, async (req, re
     }
 
     const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'https://swiftcargo.up.railway.app';
-    sendPaymentReminderEmail(
-      order.email,
-      order.customer_name,
-      order.tracking_number,
-      reminderAmount,
-      notes || '',
-      `${frontendUrl}/wallet?pay=${id}&amount=${reminderAmount}`
-    ).catch(console.error);
-
-    sendInAppNotification(
-      order.user_id,
-      `Reminder: Payment of KES ${reminderAmount.toLocaleString()} is due for order ${order.tracking_number}.${notes ? ` Note: ${notes}` : ''}`
-    );
-
-    await db.query(
-      'INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1, $2, $3, $4)',
-      [uuidv4(), adminId, 'send_payment_reminder', JSON.stringify({
-        order_id: id, tracking_number: order.tracking_number,
-        customer_email: order.email, amount: reminderAmount, notes: notes || ''
-      })]
+    sendPaymentReminderEmail(order.email, order.customer_name, order.tracking_number, reminderAmount, notes || '', `${frontendUrl}/wallet?pay=${id}&amount=${reminderAmount}`).catch(console.error);
+    sendInAppNotification(order.user_id, `Reminder: Payment of KES ${reminderAmount.toLocaleString()} is due for order ${order.tracking_number}.${notes ? ` Note: ${notes}` : ''}`);
+    await db.query('INSERT INTO admin_logs (id, admin_id, action, details) VALUES ($1, $2, $3, $4)',
+      [uuidv4(), adminId, 'send_payment_reminder', JSON.stringify({ order_id: id, tracking_number: order.tracking_number, customer_email: order.email, amount: reminderAmount, notes: notes || '' })]
     );
 
     res.json({
       success: true,
       message: `Payment reminder sent to ${order.email} for KES ${reminderAmount.toLocaleString()}`,
-      reminder: {
-        order_id: id, tracking_number: order.tracking_number,
-        customer: { email: order.email, name: order.customer_name },
-        amount: reminderAmount, currency: 'KES'
-      }
+      reminder: { order_id: id, tracking_number: order.tracking_number, customer: { email: order.email, name: order.customer_name }, amount: reminderAmount, currency: 'KES' }
     });
   } catch (error) {
     console.error('Send payment reminder error:', error);
