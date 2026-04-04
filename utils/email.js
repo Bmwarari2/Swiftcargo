@@ -1,88 +1,76 @@
 /**
- * Email service using Resend HTTP API.
- *
- * Railway blocks outbound SMTP on ports 465/587, so we use Resend's
- * HTTP-based API (port 443) which works on all cloud platforms.
+ * Email service using Google SMTP via Nodemailer.
  *
  * Required environment variables:
- *   RESEND_API_KEY    – API key from https://resend.com/api-keys
- *   EMAIL_FROM        – Verified sender, e.g. "SwiftCargo <noreply@swiftcargo.co.ke>"
- *                       (or use Resend's test address: "SwiftCargo <onboarding@resend.dev>")
+ *   SMTP_HOST         – e.g. smtp.gmail.com
+ *   SMTP_PORT         – 587 (TLS) or 465 (SSL)
+ *   SMTP_USER         – your Gmail address
+ *   SMTP_PASS         – your Gmail App Password (not your account password)
+ *   EMAIL_FROM        – e.g. "SwiftCargo <noreply@swiftcargo.co.ke>"
  *   ADMIN_CONTACT_EMAIL – Admin inbox for notifications
- *
- * Free tier: 100 emails/day, 3,000/month — more than enough to start.
  */
 
-const RESEND_API_URL = 'https://api.resend.com/emails';
+import nodemailer from 'nodemailer';
+
+function createTransport() {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_PORT || '587'),
+    secure: process.env.SMTP_PORT === '465',
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+}
 
 function getFromAddress() {
   return process.env.EMAIL_FROM
     || process.env.SMTP_FROM_EMAIL
-    || 'SwiftCargo <onboarding@resend.dev>';
+    || `SwiftCargo <${process.env.SMTP_USER}>`;
 }
 
 /**
- * Send an email via Resend HTTP API with retry logic.
- *
- * @param {object} mailOptions  – { from, to, subject, html, text }
- * @param {number} retries      – Number of retries (default 2)
- * @returns {Promise<object>}   – Resend API response
+ * Send an email via Google SMTP with retry logic.
  */
 async function sendWithRetry(mailOptions, retries = 2) {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    const msg = 'RESEND_API_KEY is not set. Email sending is disabled.';
-    console.error(`❌ ${msg}`);
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    const msg = 'SMTP_USER or SMTP_PASS is not set. Email sending is disabled.';
+    console.error(`\u274c ${msg}`);
     throw new Error(msg);
   }
 
+  const transporter = createTransport();
   let lastError;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const response = await fetch(RESEND_API_URL, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: mailOptions.from,
-          to: Array.isArray(mailOptions.to) ? mailOptions.to : [mailOptions.to],
-          subject: mailOptions.subject,
-          html: mailOptions.html,
-          text: mailOptions.text,
-        }),
+      const info = await transporter.sendMail({
+        from: mailOptions.from,
+        to: mailOptions.to,
+        subject: mailOptions.subject,
+        html: mailOptions.html,
+        text: mailOptions.text,
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        const errMsg = data.message || data.error || JSON.stringify(data);
-        throw new Error(`Resend API error (${response.status}): ${errMsg}`);
-      }
-
-      console.log(`📧 Email sent to ${mailOptions.to}: ${mailOptions.subject} (attempt ${attempt + 1}) [id: ${data.id}]`);
-      return data;
+      console.log(`\ud83d\udce7 Email sent to ${mailOptions.to}: ${mailOptions.subject} (attempt ${attempt + 1}) [id: ${info.messageId}]`);
+      return info;
     } catch (err) {
       lastError = err;
-      console.warn(`⚠ Email send attempt ${attempt + 1} failed:`, err.message);
-
-      // Wait before retrying (exponential backoff: 1s, 2s)
+      console.warn(`\u26a0 Email send attempt ${attempt + 1} failed:`, err.message);
       if (attempt < retries) {
         await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
       }
     }
   }
 
-  console.error(`❌ Email to ${mailOptions.to} failed after ${retries + 1} attempts:`, lastError.message);
+  console.error(`\u274c Email to ${mailOptions.to} failed after ${retries + 1} attempts:`, lastError.message);
   throw lastError;
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 // SHARED HTML HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 
 function emailFooter() {
   return `
@@ -136,9 +124,62 @@ function emailLayout(bodyHtml) {
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 // EMAIL TEMPLATES
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
+
+/**
+ * Send a TEST email to verify SMTP configuration.
+ * Clearly marked so recipients know to ignore it.
+ */
+export async function sendTestEmail(toEmail) {
+  const sentAt = new Date().toUTCString();
+  const bodyHtml = `
+    <!-- TEST BANNER -->
+    <div style="background-color:#fef3c7;border:2px dashed #f59e0b;border-radius:8px;padding:16px 20px;margin-bottom:28px;text-align:center;">
+      <p style="margin:0;font-size:14px;font-weight:bold;color:#92400e;letter-spacing:0.05em;">\u26a0\ufe0f THIS IS A TEST EMAIL — PLEASE IGNORE \u26a0\ufe0f</p>
+      <p style="margin:6px 0 0;font-size:12px;color:#b45309;">This message was sent from the SwiftCargo admin panel to verify email delivery. No action is required.</p>
+    </div>
+
+    <h2 style="margin:0 0 16px;color:#1e3a5f;font-size:22px;">Email Configuration Test</h2>
+    <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
+      If you are reading this, your SMTP email configuration is working correctly.
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:8px;padding:20px;margin-bottom:24px;">
+      <tr>
+        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
+          <span style="color:#6b7280;font-size:13px;">Sent to</span><br>
+          <strong style="color:#111827;font-size:15px;">${toEmail}</strong>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
+          <span style="color:#6b7280;font-size:13px;">Sent at</span><br>
+          <strong style="color:#111827;font-size:15px;">${sentAt}</strong>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px 0;">
+          <span style="color:#6b7280;font-size:13px;">Status</span><br>
+          <strong style="color:#16a34a;font-size:15px;">\u2713 Delivered successfully</strong>
+        </td>
+      </tr>
+    </table>
+
+    <p style="margin:0;color:#9ca3af;font-size:13px;line-height:1.6;">
+      You received this because an administrator triggered a test from the SwiftCargo admin panel.
+      No further action is needed.
+    </p>`;
+
+  return sendWithRetry({
+    from: getFromAddress(),
+    to: toEmail,
+    subject: '[TEST] SwiftCargo Email Configuration Test — Please Ignore',
+    html: emailLayout(bodyHtml),
+    text: `[TEST EMAIL — PLEASE IGNORE]\n\nThis is a test email sent from the SwiftCargo admin panel to verify email delivery.\n\nSent to: ${toEmail}\nSent at: ${sentAt}\nStatus: Delivered successfully\n\nNo action is required.\n\n— SwiftCargo System`,
+  });
+}
 
 /**
  * Send a password-reset email to a user.
@@ -280,66 +321,31 @@ export async function sendOrderCreatedEmail(toEmail, toName, trackingNumber, ret
     <p style="margin:0 0 24px;color:#4b5563;font-size:16px;line-height:1.6;">
       The SwiftCargo team has created a new order on your behalf. Here are the details:
     </p>
-
-    <!-- Order Details Table -->
     <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:8px;padding:20px;margin-bottom:24px;">
-      <tr>
-        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
-          <span style="color:#6b7280;font-size:14px;">Tracking Number</span><br>
-          <strong style="color:#1e3a5f;font-size:16px;font-family:monospace;">${trackingNumber}</strong>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
-          <span style="color:#6b7280;font-size:14px;">Retailer</span><br>
-          <strong style="color:#111827;font-size:15px;">${retailer}</strong>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
-          <span style="color:#6b7280;font-size:14px;">Shipping From</span><br>
-          <strong style="color:#111827;font-size:15px;">${market}</strong>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
-          <span style="color:#6b7280;font-size:14px;">Description</span><br>
-          <strong style="color:#111827;font-size:15px;">${description}</strong>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:8px 0;">
-          <span style="color:#6b7280;font-size:14px;">Shipping Speed</span><br>
-          <strong style="color:#111827;font-size:15px;">${speedLabel}</strong>
-        </td>
-      </tr>
+      <tr><td style="padding:8px 0;border-bottom:1px solid #e5e7eb;"><span style="color:#6b7280;font-size:14px;">Tracking Number</span><br><strong style="color:#1e3a5f;font-size:16px;font-family:monospace;">${trackingNumber}</strong></td></tr>
+      <tr><td style="padding:8px 0;border-bottom:1px solid #e5e7eb;"><span style="color:#6b7280;font-size:14px;">Retailer</span><br><strong style="color:#111827;font-size:15px;">${retailer}</strong></td></tr>
+      <tr><td style="padding:8px 0;border-bottom:1px solid #e5e7eb;"><span style="color:#6b7280;font-size:14px;">Shipping From</span><br><strong style="color:#111827;font-size:15px;">${market}</strong></td></tr>
+      <tr><td style="padding:8px 0;border-bottom:1px solid #e5e7eb;"><span style="color:#6b7280;font-size:14px;">Description</span><br><strong style="color:#111827;font-size:15px;">${description}</strong></td></tr>
+      <tr><td style="padding:8px 0;"><span style="color:#6b7280;font-size:14px;">Shipping Speed</span><br><strong style="color:#111827;font-size:15px;">${speedLabel}</strong></td></tr>
     </table>
-
     <p style="margin:0 0 24px;color:#4b5563;font-size:15px;line-height:1.6;">
-      You will receive further updates as your package moves through our warehouse. Our team will contact you regarding payment once the shipment is confirmed.
+      You will receive further updates as your package moves through our warehouse.
     </p>
-
     <table cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
       <tr>
         <td style="background-color:#f97316;border-radius:8px;">
           <a href="${dashboardLink}" target="_blank"
-             style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;">
-            View My Orders
-          </a>
+             style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;">View My Orders</a>
         </td>
       </tr>
-    </table>
-
-    <p style="margin:0;color:#6b7280;font-size:14px;line-height:1.6;">
-      If you have any questions, please reach out to our support team via the portal.
-    </p>`;
+    </table>`;
 
   return sendWithRetry({
     from: getFromAddress(),
     to: toEmail,
     subject: `New Order Created for You — ${trackingNumber}`,
     html: emailLayout(bodyHtml),
-    text: `Hello ${toName || 'there'},\n\nThe SwiftCargo team has created a new order on your behalf.\n\nTracking Number: ${trackingNumber}\nRetailer: ${retailer}\nShipping From: ${market}\nDescription: ${description}\nShipping Speed: ${speedLabel}\n\nYou will receive updates as your package progresses. Our team will contact you regarding payment once confirmed.\n\nView your orders: ${dashboardLink}\n\n— SwiftCargo Team`,
+    text: `Hello ${toName || 'there'},\n\nThe SwiftCargo team has created a new order on your behalf.\n\nTracking Number: ${trackingNumber}\nRetailer: ${retailer}\nShipping From: ${market}\nDescription: ${description}\nShipping Speed: ${speedLabel}\n\nView your orders: ${dashboardLink}\n\n— SwiftCargo Team`,
   });
 }
 
@@ -351,66 +357,37 @@ export async function sendWelcomeAccountEmail(toEmail, toName, warehouseId, role
 
   const bodyHtml = `
     <h2 style="margin:0 0 16px;color:#1e3a5f;font-size:22px;">Welcome to SwiftCargo!</h2>
+    <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">Hello ${toName || 'there'},</p>
     <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
-      Hello ${toName || 'there'},
+      A SwiftCargo ${roleLabel.toLowerCase()} account has been created for you.
     </p>
-    <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
-      A SwiftCargo ${roleLabel.toLowerCase()} account has been created for you. Here are your account details:
-    </p>
-
-    <!-- Account Details -->
     <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:8px;padding:20px;margin-bottom:24px;">
-      <tr>
-        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
-          <span style="color:#6b7280;font-size:14px;">Email</span><br>
-          <strong style="color:#1e3a5f;font-size:16px;">${toEmail}</strong>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
-          <span style="color:#6b7280;font-size:14px;">Account Type</span><br>
-          <strong style="color:#111827;font-size:15px;">${roleLabel}</strong>
-        </td>
-      </tr>
-      ${warehouseId ? `<tr>
-        <td style="padding:8px 0;">
-          <span style="color:#6b7280;font-size:14px;">Warehouse ID</span><br>
-          <strong style="color:#1e3a5f;font-size:16px;font-family:monospace;">${warehouseId}</strong>
-        </td>
-      </tr>` : ''}
+      <tr><td style="padding:8px 0;border-bottom:1px solid #e5e7eb;"><span style="color:#6b7280;font-size:14px;">Email</span><br><strong style="color:#1e3a5f;font-size:16px;">${toEmail}</strong></td></tr>
+      <tr><td style="padding:8px 0;border-bottom:1px solid #e5e7eb;"><span style="color:#6b7280;font-size:14px;">Account Type</span><br><strong style="color:#111827;font-size:15px;">${roleLabel}</strong></td></tr>
+      ${warehouseId ? `<tr><td style="padding:8px 0;"><span style="color:#6b7280;font-size:14px;">Warehouse ID</span><br><strong style="color:#1e3a5f;font-size:16px;font-family:monospace;">${warehouseId}</strong></td></tr>` : ''}
     </table>
-
     <p style="margin:0 0 24px;color:#4b5563;font-size:16px;line-height:1.6;">
-      To get started, please set up your password by clicking the button below. This link will expire in <strong>24 hours</strong>.
+      Please set up your password by clicking the button below. This link will expire in <strong>24 hours</strong>.
     </p>
-
     <table cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
       <tr>
         <td style="background-color:#f97316;border-radius:8px;">
           <a href="${setPasswordLink}" target="_blank"
-             style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;">
-            Create My Password
-          </a>
+             style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;">Create My Password</a>
         </td>
       </tr>
     </table>
-
-    <p style="margin:0 0 16px;color:#6b7280;font-size:14px;line-height:1.6;">
-      Once your password is set, you can log in at any time to manage your shipments, track packages, and more.
-    </p>
-    <p style="margin:0;color:#6b7280;font-size:14px;line-height:1.6;">
-      If the button above doesn't work, copy and paste this link into your browser:
-    </p>
-    <p style="margin:8px 0 0;word-break:break-all;color:#f97316;font-size:13px;">
-      ${setPasswordLink}
+    <p style="margin:0;color:#6b7280;font-size:14px;">
+      If the button above doesn't work, copy and paste this link:<br>
+      <span style="word-break:break-all;color:#f97316;font-size:13px;">${setPasswordLink}</span>
     </p>`;
 
   return sendWithRetry({
     from: getFromAddress(),
     to: toEmail,
-    subject: `Welcome to SwiftCargo — Set Up Your Account`,
+    subject: 'Welcome to SwiftCargo — Set Up Your Account',
     html: emailLayout(bodyHtml),
-    text: `Hello ${toName || 'there'},\n\nA SwiftCargo ${roleLabel.toLowerCase()} account has been created for you.\n\nEmail: ${toEmail}\nAccount Type: ${roleLabel}\n${warehouseId ? `Warehouse ID: ${warehouseId}\n` : ''}\nTo get started, please set up your password using this link (expires in 24 hours):\n${setPasswordLink}\n\nOnce your password is set, you can log in to manage your shipments.\n\n— SwiftCargo Team`,
+    text: `Hello ${toName || 'there'},\n\nA SwiftCargo ${roleLabel.toLowerCase()} account has been created for you.\n\nEmail: ${toEmail}\nAccount Type: ${roleLabel}\n${warehouseId ? `Warehouse ID: ${warehouseId}\n` : ''}\nSet up your password here (expires in 24 hours):\n${setPasswordLink}\n\n— SwiftCargo Team`,
   });
 }
 
@@ -420,49 +397,32 @@ export async function sendWelcomeAccountEmail(toEmail, toName, warehouseId, role
 export async function sendPaymentReminderEmail(toEmail, toName, trackingNumber, amount, notes, paymentLink) {
   const bodyHtml = `
     <h2 style="margin:0 0 16px;color:#1e3a5f;font-size:22px;">Payment Reminder</h2>
+    <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">Hello ${toName || 'there'},</p>
     <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
-      Hello ${toName || 'there'},
+      This is a friendly reminder that a payment of <strong>KES ${amount.toLocaleString()}</strong>
+      is outstanding for your order <strong>${trackingNumber}</strong>.
     </p>
-    <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
-      This is a friendly reminder that a payment of <strong>KES ${amount.toLocaleString()}</strong> is outstanding for your order <strong>${trackingNumber}</strong>.
-    </p>
-    <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
-      Please complete this payment at your earliest convenience so we can proceed with processing your shipment.
-    </p>
-    ${notes ? `
-    <div style="margin:0 0 24px;background-color:#fef9c3;padding:12px 16px;border-left:4px solid #f59e0b;border-radius:4px;">
-      <p style="margin:0;color:#92400e;font-size:14px;line-height:1.6;"><strong>Note from admin:</strong> ${notes}</p>
-    </div>` : ''}
+    ${notes ? `<div style="margin:0 0 24px;background-color:#fef9c3;padding:12px 16px;border-left:4px solid #f59e0b;border-radius:4px;"><p style="margin:0;color:#92400e;font-size:14px;"><strong>Note from admin:</strong> ${notes}</p></div>` : ''}
     <table cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
       <tr>
         <td style="background-color:#f97316;border-radius:8px;">
           <a href="${paymentLink}" target="_blank"
-             style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;">
-            Pay Now
-          </a>
+             style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;">Pay Now</a>
         </td>
       </tr>
-    </table>
-    <p style="margin:0 0 16px;color:#6b7280;font-size:14px;line-height:1.6;">
-      You can also log in to your SwiftCargo account and pay from your wallet.
-    </p>
-    <p style="margin:0;color:#6b7280;font-size:14px;line-height:1.6;">
-      If the button above doesn't work, copy and paste this link into your browser:
-    </p>
-    <p style="margin:8px 0 0;word-break:break-all;color:#f97316;font-size:13px;">
-      ${paymentLink}
-    </p>`;
+    </table>`;
 
   return sendWithRetry({
     from: getFromAddress(),
     to: toEmail,
     subject: `Payment Reminder for Order ${trackingNumber} — KES ${amount.toLocaleString()}`,
     html: emailLayout(bodyHtml),
-    text: `Hello ${toName || 'there'},\n\nThis is a friendly reminder that a payment of KES ${amount.toLocaleString()} is outstanding for your order ${trackingNumber}.\n\nPlease complete this payment at your earliest convenience so we can proceed with processing your shipment.\n\n${notes ? `Note from admin: ${notes}\n\n` : ''}Pay here: ${paymentLink}\n\nYou can also log in and pay from your wallet.\n\n— SwiftCargo Team`,
+    text: `Hello ${toName || 'there'},\n\nPayment of KES ${amount.toLocaleString()} is outstanding for order ${trackingNumber}.\n\n${notes ? `Note: ${notes}\n\n` : ''}Pay here: ${paymentLink}\n\n— SwiftCargo Team`,
   });
 }
 
 export default {
+  sendTestEmail,
   sendPasswordResetEmail,
   sendAdminPasswordResetEmail,
   sendPaymentRequestEmail,
